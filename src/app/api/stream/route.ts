@@ -127,7 +127,8 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
 
   // Spawn real static ffmpeg process with global loops enabled
   const args = [
-    '-stream_loop', '-1',     // 🚀 Tells FFmpeg to loop the entire incoming demuxer infinitely
+    '-6',
+    '-stream_loop', '-1',     // Tells FFmpeg to loop 
     '-re',
     '-f', 'concat',
     '-safe', '0',
@@ -145,7 +146,8 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     '-b:a', '128k',
     '-ar', '44100',
     '-f', 'flv',
-    streamUrl
+    // 🚀 TIMEOUT PROTECTION: Tells the RTMP socket to fail/retry instead of hanging indefinitely
+    `${streamUrl}?rw_timeout=5000000`
   ];
 
   // Redirect stdout and stderr to a log file for debugging
