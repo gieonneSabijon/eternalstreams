@@ -92,11 +92,14 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     }
   }
 
-  // Create clean ffmpeg concat playlist file (No self-referencing file hack)
+  // 🚀 FIX: Convert to absolute structural paths so Linux FFmpeg won't disconnect silently
   const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
   const playlistContent = [
     'ffconcat version 1.0',
-    ...config.playlist.map((file: string) => `file 'uploads/${file}'`)
+    ...config.playlist.map((file: string) => {
+      const absoluteVideoPath = path.join(uploadsDir, file).replace(/\\/g, '/');
+      return `file '${absoluteVideoPath}'`;
+    })
   ].join('\n');
 
   fs.writeFileSync(playlistFilePath, playlistContent);
@@ -124,7 +127,7 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
 
   // Spawn real static ffmpeg process with global loops enabled
   const args = [
-    '-stream_loop', '-1',     // 🚀 CRITICAL: Tells FFmpeg to loop the entire incoming demuxer infinitely
+    '-stream_loop', '-1',     // 🚀 Tells FFmpeg to loop the entire incoming demuxer infinitely
     '-re',
     '-f', 'concat',
     '-safe', '0',
@@ -345,10 +348,14 @@ export async function POST(request: Request) {
               }
             }
 
+            // 🚀 FIX: Convert reorder content to absolute path lines as well
             const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
             const playlistContent = [
               'ffconcat version 1.0',
-              ...playlist.map((file: string) => `file 'uploads/${file}'`)
+              ...playlist.map((file: string) => {
+                const absoluteVideoPath = path.join(uploadsDir, file).replace(/\\/g, '/');
+                return `file '${absoluteVideoPath}'`;
+              })
             ].join('\n');
 
             fs.writeFileSync(playlistFilePath, playlistContent);
