@@ -18,7 +18,8 @@ import {
   HardDrive,
   Loader2,
   Check,
-  GripVertical
+  GripVertical,
+  Terminal
 } from "lucide-react";
 
 interface FileItem {
@@ -54,6 +55,10 @@ export default function EternalStreamDashboard() {
   // Toast Notification State
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
+  // Logs State
+  const [logs, setLogs] = useState<string>("");
+  const [isRefreshingLogs, setIsRefreshingLogs] = useState<boolean>(false);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const showToast = (message: string, type: "success" | "error" = "success") => {
@@ -81,6 +86,21 @@ export default function EternalStreamDashboard() {
     }
   };
 
+  const fetchLogs = async () => {
+    setIsRefreshingLogs(true);
+    try {
+      const res = await fetch("/api/logs");
+      if (res.ok) {
+        const data = await res.json();
+        setLogs(data.logs || "");
+      }
+    } catch (err) {
+      console.error("Error fetching logs:", err);
+    } finally {
+      setIsRefreshingLogs(false);
+    }
+  };
+
   // Sync dashboard state on mount
   useEffect(() => {
     async function initDashboard() {
@@ -103,10 +123,26 @@ export default function EternalStreamDashboard() {
 
       // Fetch files list
       await refreshFiles();
+      // Fetch initial logs
+      await fetchLogs();
     }
 
     initDashboard();
   }, []);
+
+  // Poll logs when live
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (status === "live") {
+      fetchLogs(); // Initial check
+      interval = setInterval(() => {
+        fetchLogs();
+      }, 4000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [status]);
 
   // Format bytes helper
   const formatBytes = (bytes: number) => {
@@ -807,6 +843,29 @@ export default function EternalStreamDashboard() {
                 </button>
 
               </div>
+            </div>
+
+            {/* Live Stream Logs Card */}
+            <div className="bg-twitch-bg-dark rounded-xl border border-zinc-800 shadow-xl p-6 flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Terminal className="w-5 h-5 text-twitch-purple" />
+                  Engine Logs
+                </h2>
+                <button
+                  onClick={fetchLogs}
+                  disabled={isRefreshingLogs}
+                  className="text-xs text-twitch-purple hover:text-twitch-purple-hover hover:underline font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                >
+                  {isRefreshingLogs ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : null}
+                  Refresh Logs
+                </button>
+              </div>
+              <pre className="bg-twitch-bg-darker border border-zinc-850 rounded-lg p-3 text-[11px] font-mono text-zinc-400 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                {logs || "No log entries captured yet."}
+              </pre>
             </div>
 
           </section>

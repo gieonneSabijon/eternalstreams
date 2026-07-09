@@ -2,9 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { getCleanedFfmpegPath, getVideoConfig, isNormalized, normalizeVideo } from '@/lib/video';
-
-const ffmpegPath = getCleanedFfmpegPath();
+import { getFfmpegCommand, getVideoConfig, isNormalized, normalizeVideo } from '@/lib/video';
 
 const configPath = path.join(process.cwd(), 'stream-config.json');
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -58,6 +56,8 @@ export function writeConfig(config: any) {
 }
 
 export async function startBroadcastHelper(streamKey: string, config: any) {
+  const ffmpegPath = getFfmpegCommand();
+
   // Get reference video config from the first item in the playlist
   const firstVideoName = config.playlist[0];
   const firstVideoPath = path.join(uploadsDir, firstVideoName);
@@ -129,7 +129,9 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     '-safe', '0',
     '-i', playlistFilePath,
     '-c:v', 'libx264',
-    '-preset', 'veryfast',
+    '-preset', 'superfast', // optimized CPU encoding
+    '-tune', 'zerolatency',
+    '-threads', '0',
     '-b:v', '2500k',
     '-maxrate', '2500k',
     '-bufsize', '5000k',
@@ -301,19 +303,20 @@ export async function POST(request: Request) {
           } else {
             // Reference video is the same. Just dynamically normalize any other videos that don't match the current targetConfig.
             if (config.targetConfig) {
+              const ffmpegPath = getFfmpegCommand();
               for (const file of playlist) {
                 const filePath = path.join(uploadsDir, file);
                 try {
                   const isNorm = await isNormalized(filePath, config.targetConfig, ffmpegPath);
                   if (!isNorm) {
-                    console.log(`Dynamic normalization: Normalizing reordered video "${file}" to match live targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
-                    const tempPath = filePath + '.tmp.mp4';
-                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
-                    if (fs.existsSync(tempPath)) {
-                      fs.unlinkSync(filePath);
-                      fs.renameSync(tempPath, filePath);
-                      console.log(`Successfully normalized "${file}"`);
-                    }
+                     console.log(`Dynamic normalization: Normalizing reordered video "${file}" to match live targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
+                     const tempPath = filePath + '.tmp.mp4';
+                     await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
+                     if (fs.existsSync(tempPath)) {
+                       fs.unlinkSync(filePath);
+                       fs.renameSync(tempPath, filePath);
+                       console.log(`Successfully normalized "${file}"`);
+                     }
                   }
                 } catch (err) {
                   console.error(`Failed to dynamically normalize reordered file "${file}":`, err);

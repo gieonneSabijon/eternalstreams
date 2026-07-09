@@ -1,4 +1,4 @@
-import { exec, spawn } from 'child_process';
+import { exec, spawn, execSync } from 'child_process';
 import util from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -25,6 +25,40 @@ export function getCleanedFfmpegPath(): string {
   }
   return ffmpegPath;
 }
+
+export function getFfmpegCommand(): string {
+  const staticPath = getCleanedFfmpegPath();
+  
+  // 1. Try static path first, check if it's executable and works
+  try {
+    if (fs.existsSync(staticPath)) {
+      // On non-Windows, ensure it is executable
+      if (process.platform !== 'win32') {
+        try {
+          fs.chmodSync(staticPath, 0o755);
+        } catch (chmodErr) {
+          console.warn(`Failed to chmod static ffmpeg binary:`, chmodErr);
+        }
+      }
+      execSync(`"${staticPath}" -version`, { stdio: 'ignore' });
+      return staticPath;
+    }
+  } catch (err) {
+    console.warn(`Static FFmpeg binary failed execution check:`, err);
+  }
+
+  // 2. Fallback to system ffmpeg command
+  try {
+    execSync('ffmpeg -version', { stdio: 'ignore' });
+    return 'ffmpeg';
+  } catch (err) {
+    console.error('System ffmpeg command not found or failed check.');
+  }
+
+  // Fallback to staticPath anyway if nothing else works
+  return staticPath;
+}
+
 
 export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<VideoConfig> {
   return new Promise((resolve, reject) => {

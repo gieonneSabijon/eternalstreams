@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { getCleanedFfmpegPath, normalizeVideo } from '@/lib/video';
+import { getFfmpegCommand, normalizeVideo } from '@/lib/video';
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const configPath = path.join(process.cwd(), 'stream-config.json');
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
         const configData = fs.readFileSync(configPath, 'utf-8');
         const config = JSON.parse(configData);
         if (config.status === 'live' && config.targetConfig) {
-          const ffmpegPath = getCleanedFfmpegPath();
+          const ffmpegPath = getFfmpegCommand();
           console.log(`Live stream running. Dynamically normalizing uploaded file "${fileName}" to match targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
           const tempPath = filePath + '.tmp.mp4';
           await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
