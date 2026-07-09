@@ -64,7 +64,6 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
   let targetConfig;
   try {
     targetConfig = await getVideoConfig(firstVideoPath, ffmpegPath);
-    // Save targetConfig to the config file so it's persisted for the running stream
     config.targetConfig = targetConfig;
     writeConfig(config);
   } catch (err: any) {
@@ -93,12 +92,11 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     }
   }
 
-  // Create ffmpeg concat playlist file (self-referencing to loop the entire list infinitely using relative paths)
+  // Create clean ffmpeg concat playlist file (No self-referencing file hack)
   const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
   const playlistContent = [
     'ffconcat version 1.0',
-    ...config.playlist.map((file: string) => `file 'uploads/${file}'`),
-    `file 'temp_playlist.txt'`
+    ...config.playlist.map((file: string) => `file 'uploads/${file}'`)
   ].join('\n');
 
   fs.writeFileSync(playlistFilePath, playlistContent);
@@ -119,21 +117,20 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     (global as any).ffmpegProcess = null;
   }
 
-  // Ingest endpoint: If a full rtmp:// or rtmps:// URL is provided in the streamKey input, use it directly.
-  // Otherwise, default to Twitch standard RTMP (highly compatible with VPS and system ffmpeg builds).
   let streamUrl = streamKey.trim();
   if (!streamUrl.startsWith('rtmp://') && !streamUrl.startsWith('rtmps://')) {
     streamUrl = `rtmp://iad05.contribute.live-video.net/app/${streamUrl}`;
   }
 
-  // Spawn real static ffmpeg process
+  // Spawn real static ffmpeg process with global loops enabled
   const args = [
+    '-stream_loop', '-1',     // 🚀 CRITICAL: Tells FFmpeg to loop the entire incoming demuxer infinitely
     '-re',
     '-f', 'concat',
     '-safe', '0',
     '-i', playlistFilePath,
     '-c:v', 'libx264',
-    '-preset', 'superfast', // optimized CPU encoding
+    '-preset', 'superfast',
     '-tune', 'zerolatency',
     '-threads', '0',
     '-b:v', '2500k',
@@ -164,20 +161,17 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
   child.unref();
   (global as any).ffmpegProcess = child;
 
-  // Update config with status, streamKey and new PID
   config.status = 'live';
   config.streamKey = streamKey.trim();
   config.pid = child.pid;
   writeConfig(config);
 
-  // Handle child process exit
   child.on('exit', (code, signal) => {
     console.log(`FFmpeg process exited with code ${code} and signal ${signal}`);
     if ((global as any).ffmpegProcess === child) {
       (global as any).ffmpegProcess = null;
     }
 
-    // Re-read config, if the PID matches, set status back to offline
     const latestConfig = readConfig();
     if (latestConfig.pid === child.pid) {
       latestConfig.status = 'offline';
@@ -194,7 +188,6 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
       console.error('Failed to write spawn error to log file:', logErr);
     }
 
-    // Reset stream status since launch failed
     const latestConfig = readConfig();
     if (latestConfig.pid === child.pid) {
       latestConfig.status = 'offline';
@@ -208,7 +201,6 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
 
 export async function GET() {
   const config = readConfig();
-  // Sync status
   if (config.status === 'live' && !isProcessAlive(config.pid)) {
     config.status = 'offline';
     config.pid = null;
@@ -225,7 +217,6 @@ export async function POST(request: Request) {
     const config = readConfig();
 
     if (action === 'status') {
-      // Sync status
       if (config.status === 'live' && !isProcessAlive(config.pid)) {
         config.status = 'offline';
         config.pid = null;
@@ -246,7 +237,6 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'You must upload at least one video loop to start.' }, { status: 400 });
       }
 
-      // Check if all files in playlist actually exist in uploads/
       const missingFiles = config.playlist.filter((file: string) => !fs.existsSync(path.join(uploadsDir, file)));
       if (missingFiles.length > 0) {
         return NextResponse.json({ error: `Some playlist files are missing on server: ${missingFiles.join(', ')}` }, { status: 400 });
@@ -262,14 +252,12 @@ export async function POST(request: Request) {
     } else if (action === 'stop') {
       config.status = 'offline';
 
-      // Kill the running ffmpeg process by PID
       if (config.pid) {
         killProcess(config.pid);
         config.pid = null;
       }
       writeConfig(config);
 
-      // Kill the running ffmpeg process by global variable (fallback)
       const child = (global as any).ffmpegProcess;
       if (child) {
         try {
@@ -288,18 +276,16 @@ export async function POST(request: Request) {
         if (playlist.length === 0) {
           return NextResponse.json({ error: 'Playlist cannot be empty' }, { status: 400 });
         }
-        
+
         const oldFirstVideo = config.playlist[0];
         config.playlist = playlist;
         writeConfig(config);
 
-        // If currently live, check if the reference first video has changed
         if (config.status === 'live') {
           const newFirstVideo = playlist[0];
           if (oldFirstVideo !== newFirstVideo) {
             console.log(`First video in playlist changed from "${oldFirstVideo}" to "${newFirstVideo}". Restarting live stream with new reference configuration...`);
-            
-            // Stop current stream first
+
             if (config.pid) {
               killProcess(config.pid);
               config.pid = null;
@@ -310,7 +296,6 @@ export async function POST(request: Request) {
               (global as any).ffmpegProcess = null;
             }
 
-            // Restart live stream with the new config!
             try {
               const updatedConfig = await startBroadcastHelper(config.streamKey, config);
               return NextResponse.json({ success: true, playlist: updatedConfig.playlist });
@@ -318,7 +303,6 @@ export async function POST(request: Request) {
               return NextResponse.json({ error: `Failed to restart stream with new first video: ${err.message}` }, { status: 500 });
             }
           } else {
-            // Reference video is the same. Just dynamically normalize any other videos that don't match the current targetConfig.
             if (config.targetConfig) {
               const ffmpegPath = getFfmpegCommand();
               for (const file of playlist) {
@@ -326,14 +310,14 @@ export async function POST(request: Request) {
                 try {
                   const isNorm = await isNormalized(filePath, config.targetConfig, ffmpegPath);
                   if (!isNorm) {
-                     console.log(`Dynamic normalization: Normalizing reordered video "${file}" to match live targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
-                     const tempPath = filePath + '.tmp.mp4';
-                     await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
-                     if (fs.existsSync(tempPath)) {
-                       fs.unlinkSync(filePath);
-                       fs.renameSync(tempPath, filePath);
-                       console.log(`Successfully normalized "${file}"`);
-                     }
+                    console.log(`Dynamic normalization: Normalizing reordered video "${file}" to match live targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
+                    const tempPath = filePath + '.tmp.mp4';
+                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
+                    if (fs.existsSync(tempPath)) {
+                      fs.unlinkSync(filePath);
+                      fs.renameSync(tempPath, filePath);
+                      console.log(`Successfully normalized "${file}"`);
+                    }
                   }
                 } catch (err) {
                   console.error(`Failed to dynamically normalize reordered file "${file}":`, err);
@@ -344,8 +328,7 @@ export async function POST(request: Request) {
             const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
             const playlistContent = [
               'ffconcat version 1.0',
-              ...playlist.map((file: string) => `file 'uploads/${file}'`),
-              `file 'temp_playlist.txt'` // 🚀 Restore the loop mechanics!
+              ...playlist.map((file: string) => `file 'uploads/${file}'`)
             ].join('\n');
 
             fs.writeFileSync(playlistFilePath, playlistContent);
