@@ -226,7 +226,7 @@ export default function EternalStreamDashboard() {
     setIsUploading(true);
     setUploadProgress(0);
 
-    const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks
+    const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const uploadId = Date.now().toString() + "_" + Math.random().toString(36).substring(2, 8);
 
@@ -236,16 +236,14 @@ export default function EternalStreamDashboard() {
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
 
-        const formData = new FormData();
-        formData.append("file", chunk, file.name);
-        formData.append("chunkIndex", chunkIndex.toString());
-        formData.append("totalChunks", totalChunks.toString());
-        formData.append("fileName", file.name);
-        formData.append("uploadId", uploadId);
+        const url = `/api/upload?uploadId=${uploadId}&fileName=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`;
 
-        const res = await fetch("/api/upload", {
+        const res = await fetch(url, {
           method: "POST",
-          body: formData
+          body: chunk,
+          headers: {
+            "Content-Type": "application/octet-stream"
+          }
         });
 
         if (!res.ok) {

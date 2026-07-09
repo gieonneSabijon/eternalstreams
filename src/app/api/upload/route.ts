@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { getFfmpegCommand, normalizeVideo } from '@/lib/video';
+import { Readable } from 'stream';
+import { getFfmpegCommand, normalizeVideo, isNormalized } from '@/lib/video';
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const configPath = path.join(process.cwd(), 'stream-config.json');
@@ -18,13 +19,20 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
         // If live stream is running, dynamically normalize the uploaded file to match the stream configuration
         if (config.status === 'live' && config.targetConfig) {
           const ffmpegPath = getFfmpegCommand();
-          console.log(`[Background] Live stream running. Dynamically normalizing uploaded file "${fileName}" to match targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
-          const tempPath = filePath + '.tmp.mp4';
-          await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
-          if (fs.existsSync(tempPath)) {
-            fs.unlinkSync(filePath);
-            fs.renameSync(tempPath, filePath);
-            console.log(`[Background] Successfully normalized uploaded file: ${fileName}`);
+          
+          // 🚀 OPTIMIZATION: Check if it is already normalized to bypass expensive transcoding
+          const isNorm = await isNormalized(filePath, config.targetConfig, ffmpegPath);
+          if (isNorm) {
+            console.log(`[Background] Uploaded file "${fileName}" is already normalized to match stream configuration. Skipping normalization.`);
+          } else {
+            console.log(`[Background] Live stream running. Dynamically normalizing uploaded file "${fileName}" to match targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
+            const tempPath = filePath + '.tmp.mp4';
+            await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
+            if (fs.existsSync(tempPath)) {
+              fs.unlinkSync(filePath);
+              fs.renameSync(tempPath, filePath);
+              console.log(`[Background] Successfully normalized uploaded file: ${fileName}`);
+            }
           }
         }
       }
@@ -57,18 +65,11 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
 
 export async function POST(request: Request) {
   try {
-    const formData = await request.formData();
-    
-    // Check for chunk parameters
-    const fileChunk = formData.get('file') as File | null;
-    const chunkIndexStr = formData.get('chunkIndex') as string | null;
-    const totalChunksStr = formData.get('totalChunks') as string | null;
-    const fileName = formData.get('fileName') as string | null;
-    const uploadId = formData.get('uploadId') as string | null;
-
-    if (!fileChunk) {
-      return NextResponse.json({ error: 'No file/chunk uploaded' }, { status: 400 });
-    }
+    const { searchParams } = new URL(request.url);
+    const chunkIndexStr = searchParams.get('chunkIndex');
+    const totalChunksStr = searchParams.get('totalChunks');
+    const fileName = searchParams.get('fileName');
+    const uploadId = searchParams.get('uploadId');
 
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
@@ -76,24 +77,39 @@ export async function POST(request: Request) {
 
     // 1. If it's a legacy single file upload (missing chunking parameters)
     if (chunkIndexStr === null || totalChunksStr === null || !fileName || !uploadId) {
-      const buffer = Buffer.from(await fileChunk.arrayBuffer());
-      const legacyFileName = fileChunk.name;
+      const formData = await request.formData();
+      const file = formData.get('file') as File | null;
+      if (!file) {
+        return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
+      }
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const legacyFileName = file.name;
       const filePath = path.join(uploadsDir, legacyFileName);
       fs.writeFileSync(filePath, buffer);
       
       triggerBackgroundNormalizationAndConfigUpdate(legacyFileName, filePath);
-      return NextResponse.json({ success: true, name: legacyFileName, size: fileChunk.size });
+      return NextResponse.json({ success: true, name: legacyFileName, size: file.size });
     }
 
-    // 2. Chunked upload flow
+    // 2. Streamed Chunked upload flow
+    if (!request.body) {
+      return NextResponse.json({ error: 'Request body stream is empty' }, { status: 400 });
+    }
+
     const chunkIndex = parseInt(chunkIndexStr, 10);
     const totalChunks = parseInt(totalChunksStr, 10);
     const tempFilePath = path.join(uploadsDir, `temp_${uploadId}_${fileName}`);
-    
-    const chunkBuffer = Buffer.from(await fileChunk.arrayBuffer());
-    
-    // Append this chunk to the temporary file on disk (low memory usage)
-    fs.appendFileSync(tempFilePath, chunkBuffer);
+
+    // Stream raw request body chunk directly to the temporary file on disk (low memory usage)
+    const writeStream = fs.createWriteStream(tempFilePath, { flags: 'a' });
+    const nodeStream = Readable.fromWeb(request.body as any);
+    nodeStream.pipe(writeStream);
+
+    await new Promise<void>((resolve, reject) => {
+      writeStream.on('finish', () => resolve());
+      writeStream.on('error', (err) => reject(err));
+      nodeStream.on('error', (err) => reject(err));
+    });
 
     // If it's the last chunk, finalize the file
     if (chunkIndex === totalChunks - 1) {
