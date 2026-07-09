@@ -1,26 +1,50 @@
 @import "tailwindcss";
 
+@theme {
+  --color-twitch-purple: #9146FF;
+  --color-twitch-purple-hover: #772ce8;
+  --color-twitch-bg-darker: #0e0e10;
+  --color-twitch-bg-dark: #18181b;
+  --color-twitch-bg-light: #1f1f23;
+  --color-twitch-crimson: #eb0400;
+  --color-twitch-crimson-hover: #c20300;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  color-scheme: dark;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-twitch-bg-darker);
+  color: #efeff1;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Custom Scrollbar for Video Library */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-twitch-bg-darker);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-twitch-purple);
+}
+
+/* Glow effects */
+.glow-purple {
+  box-shadow: 0 0 15px rgba(145, 70, 255, 0.2);
+}
+
+.glow-crimson {
+  box-shadow: 0 0 15px rgba(235, 4, 0, 0.2);
 }
