@@ -122,12 +122,11 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
 
   let streamUrl = streamKey.trim();
   if (!streamUrl.startsWith('rtmp://') && !streamUrl.startsWith('rtmps://')) {
-    streamUrl = `rtmp://iad05.contribute.live-video.net/app/${streamUrl}`;
+    streamUrl = `rtmps://iad05.contribute.live-video.net/app/${streamUrl}`;
   }
 
   // Spawn real static ffmpeg process with global loops enabled
   const args = [
-    '-6',
     '-stream_loop', '-1',     // Tells FFmpeg to loop 
     '-re',
     '-f', 'concat',
@@ -147,7 +146,7 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     '-ar', '44100',
     '-f', 'flv',
     // 🚀 TIMEOUT PROTECTION: Tells the RTMP socket to fail/retry instead of hanging indefinitely
-    `${streamUrl}?rw_timeout=5000000`
+    streamUrl
   ];
 
   // Redirect stdout and stderr to a log file for debugging
