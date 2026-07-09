@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { getFfmpegCommand, getVideoConfig, isNormalized, normalizeVideo } from '@/lib/video';
+import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo } from '@/lib/video';
 
 const configPath = path.join(process.cwd(), 'stream-config.json');
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -147,7 +147,27 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
 
   // Redirect stdout and stderr to a log file for debugging
   const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-  fs.writeFileSync(logFilePath, `--- Stream starting at ${new Date().toISOString()} ---\n`);
+  const safeStreamUrl = streamUrl.replace(/(app\/live_)[^/]+/, '$1******');
+
+  const envDiagnostics = getFfmpegDiagnostics();
+  const startDiagnostics = [
+    `=== ETERNAL STREAM LAUNCH REPORT ===`,
+    `Timestamp: ${new Date().toISOString()}`,
+    `Platform: ${process.platform} (${process.arch})`,
+    `Node version: ${process.version}`,
+    `Execution Directory: ${process.cwd()}`,
+    `Selected FFmpeg Command Path: ${ffmpegPath}`,
+    `Playlist Config Path: ${playlistFilePath}`,
+    `Playlist Config Content:`,
+    playlistContent,
+    `Resolved Target RTMP Endpoint: ${safeStreamUrl}`,
+    `FFmpeg Command Arguments:`,
+    JSON.stringify(args, null, 2),
+    envDiagnostics,
+    `Attempting to spawn FFmpeg process...`
+  ].join('\n') + '\n\n';
+
+  fs.writeFileSync(logFilePath, startDiagnostics);
   const logFd = fs.openSync(logFilePath, 'a');
 
   const child = spawn(ffmpegPath || 'ffmpeg', args, {

@@ -101,6 +101,13 @@ export default function EternalStreamDashboard() {
     }
   };
 
+  const handleCopyLogs = () => {
+    if (logs) {
+      navigator.clipboard.writeText(logs);
+      showToast("Logs copied to clipboard!", "success");
+    }
+  };
+
   // Sync dashboard state on mount
   useEffect(() => {
     async function initDashboard() {
@@ -852,18 +859,28 @@ export default function EternalStreamDashboard() {
                   <Terminal className="w-5 h-5 text-twitch-purple" />
                   Engine Logs
                 </h2>
-                <button
-                  onClick={fetchLogs}
-                  disabled={isRefreshingLogs}
-                  className="text-xs text-twitch-purple hover:text-twitch-purple-hover hover:underline font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                >
-                  {isRefreshingLogs ? (
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                  ) : null}
-                  Refresh Logs
-                </button>
+                <div className="flex items-center gap-3">
+                  {logs && (
+                    <button
+                      onClick={handleCopyLogs}
+                      className="text-xs text-twitch-purple hover:text-twitch-purple-hover hover:underline font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      Copy Logs
+                    </button>
+                  )}
+                  <button
+                    onClick={fetchLogs}
+                    disabled={isRefreshingLogs}
+                    className="text-xs text-twitch-purple hover:text-twitch-purple-hover hover:underline font-bold flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    {isRefreshingLogs ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : null}
+                    Refresh
+                  </button>
+                </div>
               </div>
-              <pre className="bg-twitch-bg-darker border border-zinc-850 rounded-lg p-3 text-[11px] font-mono text-zinc-400 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+              <pre className="bg-twitch-bg-darker border border-zinc-850 rounded-lg p-3 text-[11px] font-mono text-zinc-400 overflow-x-auto max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed select-text" style={{ userSelect: 'text' }}>
                 {logs || "No log entries captured yet."}
               </pre>
             </div>

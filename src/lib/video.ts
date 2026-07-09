@@ -59,6 +59,36 @@ export function getFfmpegCommand(): string {
   return staticPath;
 }
 
+export function getFfmpegDiagnostics(): string {
+  const staticPath = getCleanedFfmpegPath();
+  let log = `=== FFmpeg Environment Diagnostics ===\n`;
+  log += `- Static binary path: ${staticPath}\n`;
+  log += `- Static binary exists: ${fs.existsSync(staticPath)}\n`;
+  
+  if (fs.existsSync(staticPath)) {
+    try {
+      if (process.platform !== 'win32') {
+        try { fs.chmodSync(staticPath, 0o755); } catch {}
+      }
+      const output = execSync(`"${staticPath}" -version`, { encoding: 'utf-8', timeout: 3000 });
+      log += `- Static binary run check: SUCCESS\n  Version header: ${output.split('\n')[0].trim()}\n`;
+    } catch (err: any) {
+      log += `- Static binary run check: FAILED. Error: ${err.message}\n`;
+    }
+  }
+
+  try {
+    const output = execSync('ffmpeg -version', { encoding: 'utf-8', timeout: 3000 });
+    log += `- System 'ffmpeg' check: SUCCESS\n  Version header: ${output.split('\n')[0].trim()}\n`;
+  } catch (err: any) {
+    log += `- System 'ffmpeg' check: FAILED. Error: ${err.message}\n`;
+  }
+
+  log += `======================================\n`;
+  return log;
+}
+
+
 
 export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<VideoConfig> {
   return new Promise((resolve, reject) => {
