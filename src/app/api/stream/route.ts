@@ -123,7 +123,7 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
   // Otherwise, default to Twitch standard RTMP (highly compatible with VPS and system ffmpeg builds).
   let streamUrl = streamKey.trim();
   if (!streamUrl.startsWith('rtmp://') && !streamUrl.startsWith('rtmps://')) {
-    streamUrl = `rtmp://ingest.global-contribute.live-video.net/app/${streamUrl}`;
+    streamUrl = `rtmp://iad05.contribute.live-video.net/app/${streamUrl}`;
   }
 
   // Spawn real static ffmpeg process
