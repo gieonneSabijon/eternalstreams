@@ -226,38 +226,41 @@ export default function EternalStreamDashboard() {
     setIsUploading(true);
     setUploadProgress(0);
 
-    const formData = new FormData();
-    formData.append("file", file);
+    const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    const uploadId = Date.now().toString() + "_" + Math.random().toString(36).substring(2, 8);
 
     try {
-      const interval = setInterval(() => {
-        setUploadProgress(prev => {
-          if (prev === null) return 0;
-          if (prev >= 90) {
-            clearInterval(interval);
-            return 90;
-          }
-          return prev + 15;
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const formData = new FormData();
+        formData.append("file", chunk, file.name);
+        formData.append("chunkIndex", chunkIndex.toString());
+        formData.append("totalChunks", totalChunks.toString());
+        formData.append("fileName", file.name);
+        formData.append("uploadId", uploadId);
+
+        const res = await fetch("/api/upload", {
+          method: "POST",
+          body: formData
         });
-      }, 100);
 
-      const res = await fetch("/api/upload", {
-        method: "POST",
-        body: formData
-      });
+        if (!res.ok) {
+          const errData = await res.json();
+          throw new Error(errData.error || `Chunk ${chunkIndex + 1}/${totalChunks} upload failed.`);
+        }
 
-      clearInterval(interval);
-      setUploadProgress(100);
-
-      if (res.ok) {
-        showToast(`"${file.name}" uploaded successfully!`, "success");
-        await refreshFiles();
-      } else {
-        const errData = await res.json();
-        showToast(errData.error || "File upload rejected by VPS.", "error");
+        const progressPercent = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+        setUploadProgress(progressPercent);
       }
-    } catch (err) {
-      showToast("Network failure during upload.", "error");
+
+      showToast(`"${file.name}" uploaded successfully!`, "success");
+      await refreshFiles();
+    } catch (err: any) {
+      showToast(err.message || "Network failure during upload.", "error");
     } finally {
       setTimeout(() => {
         setIsUploading(false);

@@ -11,7 +11,28 @@ export async function GET() {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
 
-    const files = fs.readdirSync(uploadsDir);
+    const allFiles = fs.readdirSync(uploadsDir);
+
+    // Clean up temporary files older than 24 hours
+    const now = Date.now();
+    const EXPIRATION_TIME = 24 * 60 * 60 * 1000;
+    allFiles.forEach((fileName) => {
+      if (fileName.startsWith('temp_') || fileName.endsWith('.tmp.mp4')) {
+        const filePath = path.join(uploadsDir, fileName);
+        try {
+          const stats = fs.statSync(filePath);
+          if (now - stats.mtimeMs > EXPIRATION_TIME) {
+            fs.unlinkSync(filePath);
+            console.log(`Cleaned up expired temporary file: ${fileName}`);
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+    });
+
+    // Exclude temp files from library listing
+    const files = allFiles.filter((fileName) => !fileName.startsWith('temp_') && !fileName.endsWith('.tmp.mp4'));
     
     // Read playlist config for custom ordering
     let playlist: string[] = [];
