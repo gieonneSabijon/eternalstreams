@@ -119,8 +119,12 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     (global as any).ffmpegProcess = null;
   }
 
-  // Ingest endpoint for Twitch (using secure RTMPS over port 443 to bypass port 1935 blocks)
-  const streamUrl = `rtmps://ingest.global-contribute.live-video.net:443/app/${streamKey.trim()}`;
+  // Ingest endpoint: If a full rtmp:// or rtmps:// URL is provided in the streamKey input, use it directly.
+  // Otherwise, default to Twitch standard RTMP (highly compatible with VPS and system ffmpeg builds).
+  let streamUrl = streamKey.trim();
+  if (!streamUrl.startsWith('rtmp://') && !streamUrl.startsWith('rtmps://')) {
+    streamUrl = `rtmp://ingest.global-contribute.live-video.net/app/${streamUrl}`;
+  }
 
   // Spawn real static ffmpeg process
   const args = [
@@ -184,6 +188,19 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
 
   child.on('error', (err) => {
     console.error('FFmpeg process launch error:', err);
+    try {
+      fs.appendFileSync(logFilePath, `FFmpeg process launch CRITICAL error: ${err.message}\n`);
+    } catch (logErr) {
+      console.error('Failed to write spawn error to log file:', logErr);
+    }
+
+    // Reset stream status since launch failed
+    const latestConfig = readConfig();
+    if (latestConfig.pid === child.pid) {
+      latestConfig.status = 'offline';
+      latestConfig.pid = null;
+      writeConfig(latestConfig);
+    }
   });
 
   return config;
