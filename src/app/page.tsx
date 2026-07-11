@@ -530,6 +530,16 @@ export default function EternalStreamDashboard() {
                 </div>
                 <div className="flex items-center gap-3">
                   <button
+                    id="refresh-library-btn"
+                    onClick={refreshFiles}
+                    disabled={isLoadingFiles}
+                    className="flex items-center gap-1.5 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded border border-zinc-700 text-xs font-bold transition-all duration-200 cursor-pointer disabled:opacity-50"
+                    title="Refresh video list from server"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFiles ? "animate-spin" : ""}`} />
+                    <span>Refresh</span>
+                  </button>
+                  <button
                     id="sync-config-btn"
                     onClick={handleResyncConfig}
                     disabled={isSyncingConfig}
