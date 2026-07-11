@@ -367,6 +367,136 @@ export async function POST(request: Request) {
       } else {
         return NextResponse.json({ error: 'Playlist must be an array' }, { status: 400 });
       }
+    } else if (action === 'sync') {
+      try {
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+        const allFiles = fs.readdirSync(uploadsDir);
+        const filesOnDisk = allFiles.filter((fileName) => !fileName.startsWith('temp_') && !fileName.endsWith('.tmp.mp4'));
+
+        const oldPlaylist = config.playlist || [];
+        const oldFirstVideo = oldPlaylist[0];
+
+        // Filter out files that no longer exist on disk
+        const updatedPlaylist = oldPlaylist.filter((file: string) => filesOnDisk.includes(file));
+
+        // Add new files from disk that aren't in the playlist
+        filesOnDisk.forEach((file) => {
+          if (!updatedPlaylist.includes(file)) {
+            updatedPlaylist.push(file);
+          }
+        });
+
+        config.playlist = updatedPlaylist;
+
+        // Reconcile targetConfig based on the first video in the updated playlist
+        if (updatedPlaylist.length > 0) {
+          const firstVideoName = updatedPlaylist[0];
+          const firstVideoPath = path.join(uploadsDir, firstVideoName);
+          const ffmpegPath = getFfmpegCommand();
+          try {
+            const targetConfig = await getVideoConfig(firstVideoPath, ffmpegPath);
+            config.targetConfig = targetConfig;
+          } catch (err: any) {
+            console.error(`[Sync] Failed to read video config of the first video:`, err);
+          }
+        } else {
+          // If playlist is empty, clear targetConfig
+          config.targetConfig = null;
+        }
+
+        // Reconcile currentFile
+        if (config.currentFile && !updatedPlaylist.includes(config.currentFile)) {
+          config.currentFile = '';
+        }
+
+        // Reconcile process status and PID
+        if (config.pid) {
+          const alive = isProcessAlive(config.pid);
+          if (!alive) {
+            config.status = 'offline';
+            config.pid = null;
+          }
+        } else {
+          config.status = 'offline';
+        }
+
+        writeConfig(config);
+
+        // If the stream is live, handle potential adjustments
+        if (config.status === 'live' && updatedPlaylist.length > 0) {
+          const newFirstVideo = updatedPlaylist[0];
+          if (oldFirstVideo !== newFirstVideo) {
+            console.log(`[Sync] First video in playlist changed from "${oldFirstVideo}" to "${newFirstVideo}". Restarting live stream...`);
+            if (config.pid) {
+              killProcess(config.pid);
+              config.pid = null;
+            }
+            const child = (global as any).ffmpegProcess;
+            if (child) {
+              try { child.kill('SIGKILL'); } catch (e) { console.error('Error killing ffmpeg on sync restart:', e); }
+              (global as any).ffmpegProcess = null;
+            }
+            try {
+              const updatedConfig = await startBroadcastHelper(config.streamKey, config);
+              return NextResponse.json({ success: true, playlist: updatedConfig.playlist, config: updatedConfig });
+            } catch (err: any) {
+              return NextResponse.json({ error: `Failed to restart stream with new first video after sync: ${err.message}` }, { status: 500 });
+            }
+          } else {
+            // Check & normalize other files to match targetConfig
+            if (config.targetConfig) {
+              const ffmpegPath = getFfmpegCommand();
+              for (const file of updatedPlaylist) {
+                const filePath = path.join(uploadsDir, file);
+                try {
+                  const isNorm = await isNormalized(filePath, config.targetConfig, ffmpegPath);
+                  if (!isNorm) {
+                    console.log(`[Sync] Normalizing video "${file}"`);
+                    const tempPath = filePath + '.tmp.mp4';
+                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
+                    if (fs.existsSync(tempPath)) {
+                      fs.unlinkSync(filePath);
+                      fs.renameSync(tempPath, filePath);
+                    }
+                  }
+                } catch (err) {
+                  console.error(`[Sync] Failed to normalize "${file}":`, err);
+                }
+              }
+            }
+
+            // Write playlist file
+            const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
+            const playlistContent = [
+              'ffconcat version 1.0',
+              ...updatedPlaylist.map((file: string) => {
+                const absoluteVideoPath = path.join(uploadsDir, file).replace(/\\/g, '/');
+                return `file '${absoluteVideoPath}'`;
+              })
+            ].join('\n');
+            fs.writeFileSync(playlistFilePath, playlistContent);
+          }
+        } else if (config.status === 'live' && updatedPlaylist.length === 0) {
+          // Live but no videos left
+          config.status = 'offline';
+          if (config.pid) {
+            killProcess(config.pid);
+            config.pid = null;
+          }
+          const child = (global as any).ffmpegProcess;
+          if (child) {
+            try { child.kill('SIGKILL'); } catch (e) { console.error('Error killing ffmpeg on empty sync:', e); }
+            (global as any).ffmpegProcess = null;
+          }
+          writeConfig(config);
+        }
+
+        return NextResponse.json({ success: true, playlist: config.playlist, config });
+      } catch (err: any) {
+        return NextResponse.json({ error: `Sync failed: ${err.message}` }, { status: 500 });
+      }
     } else {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }

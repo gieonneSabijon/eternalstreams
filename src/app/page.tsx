@@ -19,7 +19,8 @@ import {
   Loader2,
   Check,
   GripVertical,
-  Terminal
+  Terminal,
+  RefreshCw
 } from "lucide-react";
 
 interface FileItem {
@@ -58,6 +59,7 @@ export default function EternalStreamDashboard() {
   // Logs State
   const [logs, setLogs] = useState<string>("");
   const [isRefreshingLogs, setIsRefreshingLogs] = useState<boolean>(false);
+  const [isSyncingConfig, setIsSyncingConfig] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -105,6 +107,36 @@ export default function EternalStreamDashboard() {
     if (logs) {
       navigator.clipboard.writeText(logs);
       showToast("Logs copied to clipboard!", "success");
+    }
+  };
+
+  const handleResyncConfig = async () => {
+    setIsSyncingConfig(true);
+    try {
+      const res = await fetch("/api/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "sync" })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          showToast("Stream configuration synchronized with server storage successfully!", "success");
+          await refreshFiles();
+          if (data.config && data.config.status) {
+            setStatus(data.config.status);
+          }
+        } else {
+          showToast(data.error || "Failed to synchronize configurations.", "error");
+        }
+      } else {
+        const data = await res.json();
+        showToast(data.error || "Server rejected synchronization command.", "error");
+      }
+    } catch (err) {
+      showToast("Error communicating with stream configurations.", "error");
+    } finally {
+      setIsSyncingConfig(false);
     }
   };
 
@@ -496,8 +528,20 @@ export default function EternalStreamDashboard() {
                   <Tv className="w-5 h-5 text-twitch-purple" />
                   <h2 className="text-lg font-bold text-white">Video Library</h2>
                 </div>
-                <div className="flex items-center gap-1.5 text-xs text-zinc-400 font-semibold bg-twitch-bg-light px-2.5 py-1 rounded-md">
-                  <span>{files.length} Videos</span>
+                <div className="flex items-center gap-3">
+                  <button
+                    id="sync-config-btn"
+                    onClick={handleResyncConfig}
+                    disabled={isSyncingConfig}
+                    className="flex items-center gap-1.5 px-3 py-1 bg-twitch-purple/20 hover:bg-twitch-purple/35 text-twitch-purple hover:text-white rounded border border-twitch-purple/30 text-xs font-bold transition-all duration-200 cursor-pointer disabled:opacity-50"
+                    title="Synchronize backend configuration with folder contents"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingConfig ? "animate-spin" : ""}`} />
+                    <span>Re-sync Config</span>
+                  </button>
+                  <div className="flex items-center gap-1.5 text-xs text-zinc-400 font-semibold bg-twitch-bg-light px-2.5 py-1 rounded-md">
+                    <span>{files.length} Videos</span>
+                  </div>
                 </div>
               </div>
 
