@@ -9,6 +9,28 @@ const configPath = path.join(process.cwd(), 'stream-config.json');
 export async function DELETE(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
+    const isTempCleanup = searchParams.get('temp') === 'true';
+
+    if (isTempCleanup) {
+      if (!fs.existsSync(uploadsDir)) {
+        return NextResponse.json({ success: true, message: 'Uploads directory does not exist' });
+      }
+      const allFiles = fs.readdirSync(uploadsDir);
+      let deletedCount = 0;
+      allFiles.forEach((fileName) => {
+        if (fileName.startsWith('temp_') || fileName.endsWith('.tmp.mp4')) {
+          const filePath = path.join(uploadsDir, fileName);
+          try {
+            fs.unlinkSync(filePath);
+            deletedCount++;
+          } catch (e) {
+            console.error(`Failed to delete temp file ${fileName}:`, e);
+          }
+        }
+      });
+      return NextResponse.json({ success: true, message: `Deleted ${deletedCount} temporary file(s)` });
+    }
+
     const fileName = searchParams.get('file');
 
     if (!fileName) {

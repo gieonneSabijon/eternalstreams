@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { getStorageSpace } from '@/lib/storage';
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const configPath = path.join(process.cwd(), 'stream-config.json');
@@ -13,9 +14,11 @@ export async function GET() {
 
     const allFiles = fs.readdirSync(uploadsDir);
 
-    // Clean up temporary files older than 24 hours
+    // Clean up temporary files older than 24 hours & count remaining ones
     const now = Date.now();
     const EXPIRATION_TIME = 24 * 60 * 60 * 1000;
+    let tempCount = 0;
+    let tempSize = 0;
     allFiles.forEach((fileName) => {
       if (fileName.startsWith('temp_') || fileName.endsWith('.tmp.mp4')) {
         const filePath = path.join(uploadsDir, fileName);
@@ -24,6 +27,9 @@ export async function GET() {
           if (now - stats.mtimeMs > EXPIRATION_TIME) {
             fs.unlinkSync(filePath);
             console.log(`Cleaned up expired temporary file: ${fileName}`);
+          } else {
+            tempCount++;
+            tempSize += stats.size;
           }
         } catch (e) {
           // ignore
@@ -79,7 +85,16 @@ export async function GET() {
       size: fileMap.get(fileName) || 0,
     }));
 
-    return NextResponse.json({ files: fileList });
+    const storage = await getStorageSpace();
+
+    return NextResponse.json({
+      files: fileList,
+      storage,
+      tempFiles: {
+        count: tempCount,
+        size: tempSize
+      }
+    });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Failed to list files' }, { status: 500 });
   }

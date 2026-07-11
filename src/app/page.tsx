@@ -28,6 +28,17 @@ interface FileItem {
   size: number;
 }
 
+interface StorageInfo {
+  total: number;
+  free: number;
+  used: number;
+}
+
+interface TempFilesInfo {
+  count: number;
+  size: number;
+}
+
 export default function EternalStreamDashboard() {
   // Config & Status States
   const [status, setStatus] = useState<"live" | "offline">("offline");
@@ -36,6 +47,9 @@ export default function EternalStreamDashboard() {
   // File Library States
   const [files, setFiles] = useState<FileItem[]>([]);
   const [isLoadingFiles, setIsLoadingFiles] = useState<boolean>(true);
+  const [storage, setStorage] = useState<StorageInfo | null>(null);
+  const [tempFiles, setTempFiles] = useState<TempFilesInfo | null>(null);
+  const [isDeletingTemp, setIsDeletingTemp] = useState<boolean>(false);
 
   // Drag and Drop reordering states
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
@@ -78,6 +92,12 @@ export default function EternalStreamDashboard() {
       if (res.ok) {
         const data = await res.json();
         setFiles(data.files || []);
+        if (data.storage) {
+          setStorage(data.storage);
+        }
+        if (data.tempFiles) {
+          setTempFiles(data.tempFiles);
+        }
       } else {
         showToast("Could not retrieve media files from server storage.", "error");
       }
@@ -346,6 +366,28 @@ export default function EternalStreamDashboard() {
       }
     } catch (err) {
       showToast("Could not communicate with delete engine.", "error");
+    }
+  };
+
+  // Delete all temporary upload files
+  const handleDeleteTempFiles = async () => {
+    setIsDeletingTemp(true);
+    try {
+      const res = await fetch("/api/delete?temp=true", {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        const data = await res.json();
+        showToast(data.message || "Temporary files cleaned up successfully!", "success");
+        await refreshFiles();
+      } else {
+        const errData = await res.json();
+        showToast(errData.error || "Failed to delete temporary files.", "error");
+      }
+    } catch (err) {
+      showToast("Could not communicate with delete engine.", "error");
+    } finally {
+      setIsDeletingTemp(false);
     }
   };
 
@@ -707,11 +749,19 @@ export default function EternalStreamDashboard() {
 
             {/* Upload Zone Card */}
             <div className="bg-twitch-bg-dark rounded-xl border border-zinc-800 shadow-xl overflow-hidden">
-              <div className="px-6 py-5 border-b border-zinc-800 flex items-center gap-2.5">
-                <UploadCloud className="w-5 h-5 text-twitch-purple" />
-                <h2 className="text-lg font-bold text-white">Upload New Video</h2>
+              <div className="px-6 py-5 border-b border-zinc-800 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <UploadCloud className="w-5 h-5 text-twitch-purple" />
+                  <h2 className="text-lg font-bold text-white">Upload New Video</h2>
+                </div>
+                {storage && (
+                  <div className="text-xs font-semibold text-zinc-400 bg-twitch-bg-light/60 px-2.5 py-1 rounded-md flex items-center gap-1.5 border border-zinc-800">
+                    <HardDrive className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>{formatBytes(storage.free)} free of {formatBytes(storage.total)}</span>
+                  </div>
+                )}
               </div>
-              <div className="p-6">
+              <div className="p-6 flex flex-col gap-5">
                 <div
                   id="drop-zone"
                   onDragEnter={handleDrag}
@@ -764,6 +814,55 @@ export default function EternalStreamDashboard() {
                     </>
                   )}
                 </div>
+
+                {/* Storage Progress and Temp Files Cleanup */}
+                {storage && (
+                  <div className="border-t border-zinc-800/80 pt-4 mt-1 flex flex-col gap-3.5">
+                    {/* Storage Bar */}
+                    <div>
+                      <div className="flex justify-between text-xs font-medium text-zinc-400 mb-1.5">
+                        <span>Storage Space Usage</span>
+                        <span>{formatBytes(storage.used)} used ({Math.round((storage.used / storage.total) * 100)}%)</span>
+                      </div>
+                      <div className="w-full bg-zinc-900 h-2 rounded-full overflow-hidden border border-zinc-850/50">
+                        <div
+                          className={`h-full transition-all duration-500 rounded-full ${
+                            (storage.used / storage.total) > 0.9 
+                              ? "bg-twitch-crimson" 
+                              : (storage.used / storage.total) > 0.75 
+                                ? "bg-amber-500" 
+                                : "bg-twitch-purple"
+                          }`}
+                          style={{ width: `${Math.min(100, (storage.used / storage.total) * 100)}%` }}
+                        ></div>
+                      </div>
+                    </div>
+
+                    {/* Temp Files Cleanup */}
+                    {tempFiles && tempFiles.count > 0 && (
+                      <div className="flex items-center justify-between p-3.5 rounded-lg border bg-amber-500/5 border-amber-500/20 text-amber-200 text-xs font-semibold">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                          <span>
+                            Found {tempFiles.count} temporary upload file{tempFiles.count > 1 ? "s" : ""} ({formatBytes(tempFiles.size)})
+                          </span>
+                        </div>
+                        <button
+                          onClick={handleDeleteTempFiles}
+                          disabled={isDeletingTemp}
+                          className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded font-bold transition-all duration-200 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-amber-950/20 active:scale-[0.97]"
+                        >
+                          {isDeletingTemp ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-3.5 h-3.5" />
+                          )}
+                          <span>Delete Temp Files</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
