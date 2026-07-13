@@ -143,8 +143,7 @@ export default function EternalStreamDashboard() {
       if (res.ok) {
         const data = await res.json();
         if (data.success) {
-          showToast("Stream configuration synchronized with server storage successfully!", "success");
-          await refreshFiles();
+          showToast("Library and configurations synchronized successfully!", "success");
           if (data.config && data.config.status) {
             setStatus(data.config.status);
           }
@@ -158,6 +157,7 @@ export default function EternalStreamDashboard() {
     } catch (err) {
       showToast("Error communicating with stream configurations.", "error");
     } finally {
+      await refreshFiles();
       setIsSyncingConfig(false);
     }
   };
@@ -585,24 +585,14 @@ export default function EternalStreamDashboard() {
                 </div>
                 <div className="flex items-center gap-3">
                   <button
-                    id="refresh-library-btn"
-                    onClick={refreshFiles}
-                    disabled={isLoadingFiles}
-                    className="flex items-center gap-1.5 px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded border border-zinc-700 text-xs font-bold transition-all duration-200 cursor-pointer disabled:opacity-50"
-                    title="Refresh video list from server"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFiles ? "animate-spin" : ""}`} />
-                    <span>Refresh</span>
-                  </button>
-                  <button
-                    id="sync-config-btn"
+                    id="sync-refresh-btn"
                     onClick={handleResyncConfig}
-                    disabled={isSyncingConfig}
+                    disabled={isSyncingConfig || isLoadingFiles}
                     className="flex items-center gap-1.5 px-3 py-1 bg-twitch-purple/20 hover:bg-twitch-purple/35 text-twitch-purple hover:text-white rounded border border-twitch-purple/30 text-xs font-bold transition-all duration-200 cursor-pointer disabled:opacity-50"
-                    title="Synchronize backend configuration with folder contents"
+                    title="Synchronize backend configuration with folder contents and refresh video list"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingConfig ? "animate-spin" : ""}`} />
-                    <span>Re-sync Config</span>
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncingConfig || isLoadingFiles ? "animate-spin" : ""}`} />
+                    <span>Sync & Refresh</span>
                   </button>
                   <div className="flex items-center gap-1.5 text-xs text-zinc-400 font-semibold bg-twitch-bg-light px-2.5 py-1 rounded-md">
                     <span>{files.length} Videos</span>
@@ -839,13 +829,12 @@ export default function EternalStreamDashboard() {
                       </div>
                       <div className="w-full bg-zinc-900 h-2 rounded-full overflow-hidden border border-zinc-850/50">
                         <div
-                          className={`h-full transition-all duration-500 rounded-full ${
-                            (storage.used / storage.total) > 0.9 
-                              ? "bg-twitch-crimson" 
-                              : (storage.used / storage.total) > 0.75 
-                                ? "bg-amber-500" 
+                          className={`h-full transition-all duration-500 rounded-full ${(storage.used / storage.total) > 0.9
+                              ? "bg-twitch-crimson"
+                              : (storage.used / storage.total) > 0.75
+                                ? "bg-amber-500"
                                 : "bg-twitch-purple"
-                          }`}
+                            }`}
                           style={{ width: `${Math.min(100, (storage.used / storage.total) * 100)}%` }}
                         ></div>
                       </div>
@@ -936,11 +925,11 @@ export default function EternalStreamDashboard() {
                       disabled={status === "live"}
                       className="bg-twitch-bg-darker border border-zinc-800 rounded-lg px-3.5 py-3 text-sm text-white focus:outline-none focus:border-twitch-purple w-full cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <option value="1500">1500 kbps (Low Quality - 480p/30fps)</option>
-                      <option value="2500">2500 kbps (Medium Quality - 720p/30fps)</option>
-                      <option value="4500">4500 kbps (High Quality - Recommended)</option>
-                      <option value="6000">6000 kbps (Twitch Max - 1080p/60fps)</option>
-                      <option value="8000">8000 kbps (YouTube - 1080p/60fps High)</option>
+                      <option value="1500">1500 kbps (Low Quality)</option>
+                      <option value="2500">2500 kbps (Medium Quality)</option>
+                      <option value="4500">4500 kbps (High Quality)</option>
+                      <option value="6000">6000 kbps (Twitch Max)</option>
+                      <option value="8000">8000 kbps (YouTube)</option>
                       <option value="10000">10000 kbps (Ultra High Quality)</option>
                     </select>
                   </div>
@@ -962,10 +951,10 @@ export default function EternalStreamDashboard() {
                     >
                       <option value="ultrafast">ultrafast (Lowest CPU / Low Quality)</option>
                       <option value="superfast">superfast (Very Low CPU)</option>
-                      <option value="veryfast">veryfast (Balanced - Recommended)</option>
-                      <option value="faster">faster (High CPU - 2 vCore warning)</option>
-                      <option value="fast">fast (Very High CPU - 2 vCore warning)</option>
-                      <option value="medium">medium (Max CPU - 2 vCore warning)</option>
+                      <option value="veryfast">veryfast (Balanced)</option>
+                      <option value="faster">faster (High CPU)</option>
+                      <option value="fast">fast (Very High CPU)</option>
+                      <option value="medium">medium (Max CPU)</option>
                     </select>
                   </div>
                 </div>
