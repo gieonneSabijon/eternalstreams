@@ -43,6 +43,8 @@ export default function EternalStreamDashboard() {
   // Config & Status States
   const [status, setStatus] = useState<"live" | "offline">("offline");
   const [streamKey, setStreamKey] = useState<string>("");
+  const [bitrate, setBitrate] = useState<string>("4500");
+  const [preset, setPreset] = useState<string>("veryfast");
 
   // File Library States
   const [files, setFiles] = useState<FileItem[]>([]);
@@ -173,6 +175,8 @@ export default function EternalStreamDashboard() {
           const config = await res.json();
           setStatus(config.status);
           setStreamKey(config.streamKey || "");
+          setBitrate(config.bitrate ? String(config.bitrate) : "4500");
+          setPreset(config.preset || "veryfast");
         } else {
           showToast("Failed to connect to VPS streaming engine.", "error");
         }
@@ -484,17 +488,26 @@ export default function EternalStreamDashboard() {
     }
   };
 
-  const handleSaveStreamKey = async () => {
+  const handleSaveSettings = async (
+    currentStreamKey: string = streamKey,
+    currentBitrate: string = bitrate,
+    currentPreset: string = preset
+  ) => {
     try {
       const res = await fetch("/api/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "save_key", streamKey: streamKey.trim() })
+        body: JSON.stringify({
+          action: "save_settings",
+          streamKey: currentStreamKey.trim(),
+          bitrate: currentBitrate,
+          preset: currentPreset
+        })
       });
       if (res.ok) {
-        showToast("Stream key saved successfully!", "success");
+        showToast("Stream settings saved successfully!", "success");
       } else {
-        showToast("Failed to save stream key on VPS.", "error");
+        showToast("Failed to save stream settings on VPS.", "error");
       }
     } catch (err) {
       showToast("Error communicating with stream configuration.", "error");
@@ -866,37 +879,96 @@ export default function EternalStreamDashboard() {
               </div>
             </div>
 
-            {/* Stream Security Key Card */}
-            <div className="bg-twitch-bg-dark rounded-xl border border-zinc-800 shadow-xl p-6">
-              <h2 className="text-lg font-bold text-white mb-1.5">Stream Security Key</h2>
-              <p className="text-xs text-zinc-500 font-medium mb-4">
-                Input your Twitch Stream Key to start streaming.
-              </p>
-              <div className="relative flex items-center">
-                <input
-                  id="stream-key-input"
-                  type={showStreamKey ? "text" : "password"}
-                  value={streamKey}
-                  onChange={(e) => setStreamKey(e.target.value)}
-                  onBlur={handleSaveStreamKey}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.currentTarget.blur();
-                    }
-                  }}
-                  placeholder="Stream Key..."
-                  className="bg-twitch-bg-darker border border-zinc-800 rounded-lg pl-4 pr-12 py-3.5 text-sm text-white focus:outline-none focus:border-twitch-purple w-full font-mono placeholder-zinc-700 tracking-wide"
-                  disabled={status === "live"}
-                />
-                <button
-                  id="toggle-stream-key"
-                  type="button"
-                  onClick={() => setShowStreamKey(!showStreamKey)}
-                  className="absolute right-3.5 p-1 rounded-md text-zinc-400 hover:text-white transition-colors focus:outline-none"
-                  title={showStreamKey ? "Hide Stream Key" : "Show Stream Key"}
-                >
-                  {showStreamKey ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
+            {/* Stream Settings Card */}
+            <div className="bg-twitch-bg-dark rounded-xl border border-zinc-800 shadow-xl p-6 flex flex-col gap-6">
+              <div>
+                <h2 className="text-lg font-bold text-white mb-1.5">Stream Connection</h2>
+                <p className="text-xs text-zinc-500 font-medium mb-3">
+                  Input your Twitch Stream Key to start streaming.
+                </p>
+                <div className="relative flex items-center">
+                  <input
+                    id="stream-key-input"
+                    type={showStreamKey ? "text" : "password"}
+                    value={streamKey}
+                    onChange={(e) => setStreamKey(e.target.value)}
+                    onBlur={() => handleSaveSettings(streamKey, bitrate, preset)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.currentTarget.blur();
+                      }
+                    }}
+                    placeholder="Stream Key..."
+                    className="bg-twitch-bg-darker border border-zinc-800 rounded-lg pl-4 pr-12 py-3.5 text-sm text-white focus:outline-none focus:border-twitch-purple w-full font-mono placeholder-zinc-700 tracking-wide"
+                    disabled={status === "live"}
+                  />
+                  <button
+                    id="toggle-stream-key"
+                    type="button"
+                    onClick={() => setShowStreamKey(!showStreamKey)}
+                    className="absolute right-3.5 p-1 rounded-md text-zinc-400 hover:text-white transition-colors focus:outline-none"
+                    title={showStreamKey ? "Hide Stream Key" : "Show Stream Key"}
+                  >
+                    {showStreamKey ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="border-t border-zinc-800 pt-5">
+                <h2 className="text-lg font-bold text-white mb-1.5">Video Quality & Encoding</h2>
+                <p className="text-xs text-zinc-500 font-medium mb-4">
+                  Adjust encoding quality and compression performance. Default settings are optimized for a 2 vCore VPS.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="stream-bitrate-select" className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                      Video Bitrate
+                    </label>
+                    <select
+                      id="stream-bitrate-select"
+                      value={bitrate}
+                      onChange={(e) => {
+                        const newBitrate = e.target.value;
+                        setBitrate(newBitrate);
+                        handleSaveSettings(streamKey, newBitrate, preset);
+                      }}
+                      disabled={status === "live"}
+                      className="bg-twitch-bg-darker border border-zinc-800 rounded-lg px-3.5 py-3 text-sm text-white focus:outline-none focus:border-twitch-purple w-full cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <option value="1500">1500 kbps (Low Quality - 480p/30fps)</option>
+                      <option value="2500">2500 kbps (Medium Quality - 720p/30fps)</option>
+                      <option value="4500">4500 kbps (High Quality - Recommended)</option>
+                      <option value="6000">6000 kbps (Twitch Max - 1080p/60fps)</option>
+                      <option value="8000">8000 kbps (YouTube - 1080p/60fps High)</option>
+                      <option value="10000">10000 kbps (Ultra High Quality)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="stream-preset-select" className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                      CPU Encoding Preset
+                    </label>
+                    <select
+                      id="stream-preset-select"
+                      value={preset}
+                      onChange={(e) => {
+                        const newPreset = e.target.value;
+                        setPreset(newPreset);
+                        handleSaveSettings(streamKey, bitrate, newPreset);
+                      }}
+                      disabled={status === "live"}
+                      className="bg-twitch-bg-darker border border-zinc-800 rounded-lg px-3.5 py-3 text-sm text-white focus:outline-none focus:border-twitch-purple w-full cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <option value="ultrafast">ultrafast (Lowest CPU / Low Quality)</option>
+                      <option value="superfast">superfast (Very Low CPU)</option>
+                      <option value="veryfast">veryfast (Balanced - Recommended)</option>
+                      <option value="faster">faster (High CPU - 2 vCore warning)</option>
+                      <option value="fast">fast (Very High CPU - 2 vCore warning)</option>
+                      <option value="medium">medium (Max CPU - 2 vCore warning)</option>
+                    </select>
+                  </div>
+                </div>
               </div>
             </div>
 

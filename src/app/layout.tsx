@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Eternal Stream - VPS 24/7 Control",
-  description: "A premium, high-end 24/7 VPS stream control panel with official Twitch styling.",
+  description: "A premium, high-end 24/7 VPS stream control panel for Twitch",
 };
 
 export default function RootLayout({

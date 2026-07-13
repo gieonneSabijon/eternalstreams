@@ -175,8 +175,14 @@ export function normalizeVideo(
   filePath: string,
   tempPath: string,
   target: VideoConfig,
-  ffmpegPath: string
+  ffmpegPath: string,
+  bitrate?: number,
+  preset?: string
 ): Promise<void> {
+  const finalBitrate = bitrate ? `${bitrate}k` : '4500k';
+  const finalBufsize = bitrate ? `${bitrate * 2}k` : '9000k';
+  const finalPreset = preset || 'veryfast';
+
   return new Promise((resolve, reject) => {
     const scaleFilter = `scale=${target.width}:${target.height}:force_original_aspect_ratio=decrease,pad=${target.width}:${target.height}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
     const args = [
@@ -185,11 +191,11 @@ export function normalizeVideo(
       '-vf', scaleFilter,
       '-r', target.fps.toString(),
       '-c:v', 'libx264',
-      '-preset', 'ultrafast',
+      '-preset', finalPreset,
       '-threads', '2',
-      '-b:v', '2500k',
-      '-maxrate', '2500k',
-      '-bufsize', '5000k',
+      '-b:v', finalBitrate,
+      '-maxrate', finalBitrate,
+      '-bufsize', finalBufsize,
       '-c:a', 'aac',
       '-b:a', '128k',
       '-ar', target.sampleRate.toString(),
