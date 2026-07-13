@@ -27,7 +27,7 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
           } else {
             console.log(`[Background] Live stream running. Dynamically normalizing uploaded file "${fileName}" to match targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
             const tempPath = filePath + '.tmp.mp4';
-            await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath, config.bitrate, config.preset);
+            await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
             if (fs.existsSync(tempPath)) {
               fs.unlinkSync(filePath);
               fs.renameSync(tempPath, filePath);

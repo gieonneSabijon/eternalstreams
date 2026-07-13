@@ -31,7 +31,7 @@ export function killProcess(pid: number | undefined | null): boolean {
 export function readConfig() {
   try {
     if (!fs.existsSync(configPath)) {
-      const defaultConfig = { status: 'offline', streamKey: '', playlist: [], pid: null, bitrate: 4500, preset: 'veryfast' };
+      const defaultConfig = { status: 'offline', streamKey: '', playlist: [], pid: null };
       fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
       return defaultConfig;
     }
@@ -39,12 +39,6 @@ export function readConfig() {
     const parsed = JSON.parse(data);
     if (!parsed.playlist) {
       parsed.playlist = [];
-    }
-    if (!parsed.bitrate) {
-      parsed.bitrate = 4500;
-    }
-    if (!parsed.preset) {
-      parsed.preset = 'veryfast';
     }
     return parsed;
   } catch (error) {
@@ -85,7 +79,7 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
       if (!isNorm) {
         console.log(`Normalizing playlist video "${file}" to match reference "${firstVideoName}" (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps}fps)`);
         const tempPath = filePath + '.tmp.mp4';
-        await normalizeVideo(filePath, tempPath, targetConfig, ffmpegPath, config.bitrate, config.preset);
+        await normalizeVideo(filePath, tempPath, targetConfig, ffmpegPath);
         if (fs.existsSync(tempPath)) {
           fs.unlinkSync(filePath);
           fs.renameSync(tempPath, filePath);
@@ -131,10 +125,6 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     streamUrl = `rtmps://iad05.contribute.live-video.net/app/${streamUrl}`;
   }
 
-  const bitrateVal = config.bitrate ? `${config.bitrate}k` : '4500k';
-  const bufsizeVal = config.bitrate ? `${config.bitrate * 2}k` : '9000k';
-  const presetVal = config.preset || 'veryfast';
-
   // Spawn real static ffmpeg process with global loops enabled
   const args = [
     '-stream_loop', '-1',     // Tells FFmpeg to loop 
@@ -143,12 +133,12 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     '-safe', '0',
     '-i', playlistFilePath,
     '-c:v', 'libx264',
-    '-preset', presetVal,
+    '-preset', 'ultrafast',
     '-tune', 'zerolatency',
     '-threads', '2',
-    '-b:v', bitrateVal,
-    '-maxrate', bitrateVal,
-    '-bufsize', bufsizeVal,
+    '-b:v', '2500k',
+    '-maxrate', '2500k',
+    '-bufsize', '5000k',
     '-pix_fmt', 'yuv420p',
     '-g', '60',
     '-c:a', 'aac',
@@ -258,17 +248,8 @@ export async function POST(request: Request) {
       }
       return NextResponse.json(config);
     } else if (action === 'save_key') {
-      const { streamKey, bitrate, preset } = body;
+      const { streamKey } = body;
       config.streamKey = (streamKey || '').trim();
-      if (bitrate) config.bitrate = parseInt(bitrate, 10);
-      if (preset) config.preset = preset;
-      writeConfig(config);
-      return NextResponse.json({ success: true, ...config });
-    } else if (action === 'save_settings') {
-      const { streamKey, bitrate, preset } = body;
-      config.streamKey = (streamKey || '').trim();
-      if (bitrate) config.bitrate = parseInt(bitrate, 10);
-      if (preset) config.preset = preset;
       writeConfig(config);
       return NextResponse.json({ success: true, ...config });
     } else if (action === 'start') {
@@ -355,7 +336,7 @@ export async function POST(request: Request) {
                   if (!isNorm) {
                     console.log(`Dynamic normalization: Normalizing reordered video "${file}" to match live targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
                     const tempPath = filePath + '.tmp.mp4';
-                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath, config.bitrate, config.preset);
+                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
                     if (fs.existsSync(tempPath)) {
                       fs.unlinkSync(filePath);
                       fs.renameSync(tempPath, filePath);
@@ -474,7 +455,7 @@ export async function POST(request: Request) {
                   if (!isNorm) {
                     console.log(`[Sync] Normalizing video "${file}"`);
                     const tempPath = filePath + '.tmp.mp4';
-                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath, config.bitrate, config.preset);
+                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath);
                     if (fs.existsSync(tempPath)) {
                       fs.unlinkSync(filePath);
                       fs.renameSync(tempPath, filePath);
