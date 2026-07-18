@@ -1,4 +1,4 @@
-import { exec, spawn, execSync } from 'child_process';
+import { exec, spawn, execSync, execFile } from 'child_process';
 import util from 'util';
 import fs from 'fs';
 import path from 'path';
@@ -101,39 +101,53 @@ export function getFfmpegDiagnostics(): string {
 
 export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<VideoConfig> {
   return new Promise((resolve, reject) => {
-    exec(`"${ffmpegPath}" -i "${filePath}"`, (err, stdout, stderr) => {
+    execFile(ffmpegPath, ['-hide_banner', '-i', filePath], (err, stdout, stderr) => {
       const output = stderr || '';
+      const lines = output.split('\n');
 
-      const resMatch = output.match(/,\s*(\d{3,5})x(\d{3,5})/);
-      const width = resMatch ? parseInt(resMatch[1], 10) : null;
-      const height = resMatch ? parseInt(resMatch[2], 10) : null;
+      const videoLine = lines.find(line => line.includes('Stream #') && line.includes('Video:'));
+      const audioLine = lines.find(line => line.includes('Stream #') && line.includes('Audio:'));
 
-      const fpsMatch = output.match(/,\s*(\d+(?:\.\d+)?)\s*fps/);
-      const fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
+      let width = null;
+      let height = null;
+      let fps = 30;
+      let tbn = 90000;
 
-      const arMatch = output.match(/,\s*(\d+)\s*Hz/);
-      const sampleRate = arMatch ? parseInt(arMatch[1], 10) : 44100;
+      if (videoLine) {
+        const resMatch = videoLine.match(/,\s*(\d{3,5})x(\d{3,5})/);
+        width = resMatch ? parseInt(resMatch[1], 10) : null;
+        height = resMatch ? parseInt(resMatch[2], 10) : null;
 
-      let channels = 2;
-      if (output.includes('mono')) {
-        channels = 1;
-      } else if (output.includes('stereo')) {
-        channels = 2;
-      } else {
-        const chanMatch = output.match(/,\s*(\d+)\s*channels/);
-        if (chanMatch) {
-          channels = parseInt(chanMatch[1], 10);
+        const fpsMatch = videoLine.match(/,\s*(\d+(?:\.\d+)?)\s*fps/);
+        fps = fpsMatch ? parseFloat(fpsMatch[1]) : 30;
+
+        const tbnMatch = videoLine.match(/,\s*(\d+(?:\.\d+)?[kK]?)\s*tbn/);
+        if (tbnMatch) {
+          const valStr = tbnMatch[1].toLowerCase();
+          if (valStr.endsWith('k')) {
+            tbn = Math.round(parseFloat(valStr.slice(0, -1)) * 1000);
+          } else {
+            tbn = Math.round(parseFloat(valStr));
+          }
         }
       }
 
-      const tbnMatch = output.match(/,\s*(\d+(?:\.\d+)?[kK]?)\s*tbn/);
-      let tbn = 90000;
-      if (tbnMatch) {
-        const valStr = tbnMatch[1].toLowerCase();
-        if (valStr.endsWith('k')) {
-          tbn = Math.round(parseFloat(valStr.slice(0, -1)) * 1000);
+      let sampleRate = 44100;
+      let channels = 2;
+
+      if (audioLine) {
+        const arMatch = audioLine.match(/,\s*(\d+)\s*Hz/);
+        sampleRate = arMatch ? parseInt(arMatch[1], 10) : 44100;
+
+        if (audioLine.includes('mono')) {
+          channels = 1;
+        } else if (audioLine.includes('stereo')) {
+          channels = 2;
         } else {
-          tbn = Math.round(parseFloat(valStr));
+          const chanMatch = audioLine.match(/,\s*(\d+)\s*channels/);
+          if (chanMatch) {
+            channels = parseInt(chanMatch[1], 10);
+          }
         }
       }
 
