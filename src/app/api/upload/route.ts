@@ -2,25 +2,35 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
-import { getFfmpegCommand, normalizeVideo, isNormalized } from '@/lib/video';
+import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig } from '@/lib/video';
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const configPath = path.join(process.cwd(), 'stream-config.json');
 
-// Helper to run normalization and configuration update in the background.
+// Helper to run validation, normalization, and configuration update in the background.
 // This prevents blocking the HTTP request (preventing timeouts).
 function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePath: string) {
   (async () => {
+    const ffmpegPath = getFfmpegCommand();
     try {
+      // 1. Validate the video file first to ensure it's not corrupt (e.g. missing moov atom)
+      try {
+        await getVideoConfig(filePath, ffmpegPath);
+      } catch (validationErr: any) {
+        console.error(`[Background] Validation failed for uploaded file "${fileName}" (corrupt or invalid video):`, validationErr);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+        return; // Terminate early so we don't add a corrupt file to the playlist
+      }
+
       if (fs.existsSync(configPath)) {
         const configData = fs.readFileSync(configPath, 'utf-8');
         const config = JSON.parse(configData);
 
-        // If live stream is running, dynamically normalize the uploaded file to match the stream configuration
+        // 2. If live stream is running, dynamically normalize the uploaded file to match the stream configuration
         if (config.status === 'live' && config.targetConfig) {
-          const ffmpegPath = getFfmpegCommand();
-          
-          // 🚀 OPTIMIZATION: Check if it is already normalized to bypass expensive transcoding
+          // Check if already normalized to bypass expensive transcoding
           const isNorm = await isNormalized(filePath, config.targetConfig, ffmpegPath);
           if (isNorm) {
             console.log(`[Background] Uploaded file "${fileName}" is already normalized to match stream configuration. Skipping normalization.`);
@@ -32,35 +42,53 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
               fs.unlinkSync(filePath);
               fs.renameSync(tempPath, filePath);
               console.log(`[Background] Successfully normalized uploaded file: ${fileName}`);
+            } else {
+              throw new Error('Normalization output file was not created');
             }
           }
         }
+
+        // 3. Update playlist configuration on success
+        if (!Array.isArray(config.playlist)) {
+          config.playlist = [];
+        }
+
+        // Only append if it's not already tracked in the playlist array
+        if (!config.playlist.includes(fileName)) {
+          config.playlist.push(fileName);
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+          console.log(`[Background] Successfully appended "${fileName}" to loop playlist config`);
+        }
       }
     } catch (err) {
-      console.error(`[Background] Failed to normalize uploaded file "${fileName}" dynamically against running stream:`, err);
-    } finally {
-      // 🚀 AUTOMATICALLY UPDATE CONFIG ON SUCCESSFUL UPLOAD
-      try {
-        if (fs.existsSync(configPath)) {
-          const configData = fs.readFileSync(configPath, 'utf-8');
-          const config = JSON.parse(configData);
-
-          if (!Array.isArray(config.playlist)) {
-            config.playlist = [];
-          }
-
-          // Only append if it's not already tracked in the playlist array
-          if (!config.playlist.includes(fileName)) {
-            config.playlist.push(fileName);
-            fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-            console.log(`[Background] Successfully appended "${fileName}" to loop playlist config`);
-          }
+      console.error(`[Background] Failed to process uploaded file "${fileName}":`, err);
+      if (fs.existsSync(filePath)) {
+        try {
+          fs.unlinkSync(filePath);
+        } catch (unlinkErr) {
+          console.error(`[Background] Failed to clean up file "${fileName}":`, unlinkErr);
         }
-      } catch (configErr) {
-        console.error('[Background] Failed to update config during upload sync:', configErr);
       }
     }
   })();
+}
+
+// Memory-efficient sequential stream merge
+async function mergeChunks(chunkFiles: string[], finalFilePath: string): Promise<void> {
+  const writeStream = fs.createWriteStream(finalFilePath);
+  for (const chunkFile of chunkFiles) {
+    const readStream = fs.createReadStream(chunkFile);
+    readStream.pipe(writeStream, { end: false });
+    await new Promise<void>((resolve, reject) => {
+      readStream.on('end', resolve);
+      readStream.on('error', reject);
+    });
+  }
+  writeStream.end();
+  await new Promise<void>((resolve, reject) => {
+    writeStream.on('finish', () => resolve());
+    writeStream.on('error', (err) => reject(err));
+  });
 }
 
 export async function POST(request: Request) {
@@ -75,7 +103,7 @@ export async function POST(request: Request) {
       fs.mkdirSync(uploadsDir, { recursive: true });
     }
 
-    // 1. If it's a legacy single file upload (missing chunking parameters)
+    // 1. Legacy single file upload (missing chunking parameters)
     if (chunkIndexStr === null || totalChunksStr === null || !fileName || !uploadId) {
       const formData = await request.formData();
       const file = formData.get('file') as File | null;
@@ -98,10 +126,10 @@ export async function POST(request: Request) {
 
     const chunkIndex = parseInt(chunkIndexStr, 10);
     const totalChunks = parseInt(totalChunksStr, 10);
-    const tempFilePath = path.join(uploadsDir, `temp_${uploadId}_${fileName}`);
+    const tempChunkFilePath = path.join(uploadsDir, `temp_${uploadId}_${chunkIndex}_${fileName}`);
 
-    // Stream raw request body chunk directly to the temporary file on disk (low memory usage)
-    const writeStream = fs.createWriteStream(tempFilePath, { flags: 'a' });
+    // Stream raw request body chunk directly to the temporary chunk file on disk
+    const writeStream = fs.createWriteStream(tempChunkFilePath, { flags: 'w' });
     const nodeStream = Readable.fromWeb(request.body as any);
     nodeStream.pipe(writeStream);
 
@@ -111,16 +139,44 @@ export async function POST(request: Request) {
       nodeStream.on('error', (err) => reject(err));
     });
 
-    // If it's the last chunk, finalize the file
-    if (chunkIndex === totalChunks - 1) {
-      const finalFilePath = path.join(uploadsDir, fileName);
-      if (fs.existsSync(finalFilePath)) {
-        fs.unlinkSync(finalFilePath);
-      }
-      fs.renameSync(tempFilePath, finalFilePath);
+    // Check if all chunks have been uploaded
+    const chunkFiles = Array.from({ length: totalChunks }, (_, i) => 
+      path.join(uploadsDir, `temp_${uploadId}_${i}_${fileName}`)
+    );
 
-      // Trigger background normalization and playlist update
-      triggerBackgroundNormalizationAndConfigUpdate(fileName, finalFilePath);
+    const allPresent = chunkFiles.every(f => fs.existsSync(f));
+
+    if (allPresent) {
+      const lockKey = `${uploadId}_${fileName}`;
+      if (!(global as any).activeMerges) {
+        (global as any).activeMerges = new Set<string>();
+      }
+
+      if (!(global as any).activeMerges.has(lockKey)) {
+        (global as any).activeMerges.add(lockKey);
+        try {
+          const finalFilePath = path.join(uploadsDir, fileName);
+          if (fs.existsSync(finalFilePath)) {
+            fs.unlinkSync(finalFilePath);
+          }
+
+          await mergeChunks(chunkFiles, finalFilePath);
+
+          // Clean up chunk files
+          for (const chunkFile of chunkFiles) {
+            try {
+              fs.unlinkSync(chunkFile);
+            } catch (unlinkErr) {
+              console.error(`Failed to delete temp chunk file ${chunkFile}:`, unlinkErr);
+            }
+          }
+
+          // Trigger background validation, normalization, and config update
+          triggerBackgroundNormalizationAndConfigUpdate(fileName, finalFilePath);
+        } finally {
+          (global as any).activeMerges.delete(lockKey);
+        }
+      }
     }
 
     return NextResponse.json({ success: true, chunkIndex, totalChunks });

@@ -64,26 +64,53 @@ export function writeConfig(config: any) {
 export async function startBroadcastHelper(streamKey: string, config: any) {
   const ffmpegPath = getFfmpegCommand();
 
-  // Get reference video config from the first item in the playlist
-  const firstVideoName = config.playlist[0];
-  const firstVideoPath = path.join(uploadsDir, firstVideoName);
-  let targetConfig;
-  try {
-    targetConfig = await getVideoConfig(firstVideoPath, ffmpegPath);
-    config.targetConfig = targetConfig;
-    writeConfig(config);
-  } catch (err: any) {
-    throw new Error(`Failed to read configuration of the first video (${firstVideoName}): ${err.message}`);
+  let targetConfig = null;
+  let referenceVideoIndex = 0;
+
+  while (referenceVideoIndex < config.playlist.length) {
+    const videoName = config.playlist[referenceVideoIndex];
+    const videoPath = path.join(uploadsDir, videoName);
+    try {
+      if (!fs.existsSync(videoPath)) {
+        throw new Error('File does not exist on disk');
+      }
+      targetConfig = await getVideoConfig(videoPath, ffmpegPath);
+      if (referenceVideoIndex > 0) {
+        console.warn(`Skipped ${referenceVideoIndex} corrupt or missing video(s) at the start of the playlist.`);
+        config.playlist = config.playlist.slice(referenceVideoIndex);
+      }
+      break;
+    } catch (err: any) {
+      console.error(`Skipping invalid/corrupt playlist video "${videoName}":`, err.message);
+      if (fs.existsSync(videoPath)) {
+        try { fs.unlinkSync(videoPath); } catch {}
+      }
+      referenceVideoIndex++;
+    }
   }
 
+  if (!targetConfig) {
+    config.playlist = [];
+    config.targetConfig = null;
+    writeConfig(config);
+    throw new Error("No valid videos in the playlist to start the broadcast.");
+  }
+
+  config.targetConfig = targetConfig;
+  writeConfig(config);
+
   // Check and normalize other playlist files to match targetConfig
+  const updatedPlaylist = [config.playlist[0]];
   for (let i = 1; i < config.playlist.length; i++) {
     const file = config.playlist[i];
     const filePath = path.join(uploadsDir, file);
     try {
+      if (!fs.existsSync(filePath)) {
+        throw new Error('File does not exist on disk');
+      }
       const isNorm = await isNormalized(filePath, targetConfig, ffmpegPath);
       if (!isNorm) {
-        console.log(`Normalizing playlist video "${file}" to match reference "${firstVideoName}" (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps}fps)`);
+        console.log(`Normalizing playlist video "${file}" to match reference "${config.playlist[0]}" (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps}fps)`);
         const tempPath = filePath + '.tmp.mp4';
         await normalizeVideo(filePath, tempPath, targetConfig, ffmpegPath, config.bitrate, config.preset);
         if (fs.existsSync(tempPath)) {
@@ -92,10 +119,18 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
           console.log(`Successfully normalized "${file}"`);
         }
       }
+      updatedPlaylist.push(file);
     } catch (err: any) {
-      console.error(`Failed to normalize "${file}":`, err);
-      throw new Error(`Failed to normalize playlist video "${file}" to match reference config: ${err.message}`);
+      console.error(`Removing invalid/corrupt video "${file}" from playlist:`, err.message);
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch {}
+      }
     }
+  }
+
+  if (updatedPlaylist.length !== config.playlist.length) {
+    config.playlist = updatedPlaylist;
+    writeConfig(config);
   }
 
   // 🚀 FIX: Convert to absolute structural paths so Linux FFmpeg won't disconnect silently
