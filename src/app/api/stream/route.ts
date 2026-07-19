@@ -96,6 +96,25 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     throw new Error("No valid videos in the playlist to start the broadcast.");
   }
 
+  // Ensure the reference video itself is in standard track order (video at 0, audio at 1)
+  if (targetConfig.videoStreamIndex !== 0 || targetConfig.audioStreamIndex !== 1) {
+    console.log(`Reference video "${config.playlist[0]}" has non-standard track order. Normalizing to standard order...`);
+    const referenceVideoPath = path.join(uploadsDir, config.playlist[0]);
+    const tempPath = referenceVideoPath + '.tmp.mp4';
+    const standardTargetConfig = {
+      ...targetConfig,
+      videoStreamIndex: 0,
+      audioStreamIndex: 1
+    };
+    await normalizeVideo(referenceVideoPath, tempPath, standardTargetConfig, ffmpegPath, config.bitrate, config.preset);
+    if (fs.existsSync(tempPath)) {
+      fs.unlinkSync(referenceVideoPath);
+      fs.renameSync(tempPath, referenceVideoPath);
+      console.log(`Successfully normalized reference video to standard track order.`);
+      targetConfig = await getVideoConfig(referenceVideoPath, ffmpegPath);
+    }
+  }
+
   config.targetConfig = targetConfig;
   writeConfig(config);
 
@@ -170,13 +189,18 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
   const args = [
     '-stream_loop', '-1',     // Tells FFmpeg to loop 
     '-re',
+    '-fflags', '+genpts',
     '-f', 'concat',
     '-safe', '0',
     '-i', playlistFilePath,
     '-map', '0:v',
     '-map', '0:a',
     '-c:v', 'copy',
-    '-c:a', 'copy',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', targetConfig.sampleRate.toString(),
+    '-ac', targetConfig.channels.toString(),
+    '-af', 'aresample=async=1',
     '-f', 'flv',
     streamUrl
   ];

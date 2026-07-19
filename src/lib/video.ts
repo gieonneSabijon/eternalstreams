@@ -14,6 +14,8 @@ export interface VideoConfig {
   sampleRate: number;
   channels: number;
   tbn: number;
+  videoStreamIndex: number;
+  audioStreamIndex: number;
 }
 
 export function getCleanedFfmpegPath(): string {
@@ -112,8 +114,15 @@ export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<Vi
       let height = null;
       let fps = 30;
       let tbn = 90000;
+      let videoStreamIndex = 0;
+      let audioStreamIndex = 1;
 
       if (videoLine) {
+        const streamMatch = videoLine.match(/Stream #\d+:(\d+)/);
+        if (streamMatch) {
+          videoStreamIndex = parseInt(streamMatch[1], 10);
+        }
+
         const resMatch = videoLine.match(/,\s*(\d{3,5})x(\d{3,5})/);
         width = resMatch ? parseInt(resMatch[1], 10) : null;
         height = resMatch ? parseInt(resMatch[2], 10) : null;
@@ -136,6 +145,11 @@ export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<Vi
       let channels = 2;
 
       if (audioLine) {
+        const streamMatch = audioLine.match(/Stream #\d+:(\d+)/);
+        if (streamMatch) {
+          audioStreamIndex = parseInt(streamMatch[1], 10);
+        }
+
         const arMatch = audioLine.match(/,\s*(\d+)\s*Hz/);
         sampleRate = arMatch ? parseInt(arMatch[1], 10) : 44100;
 
@@ -160,7 +174,9 @@ export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<Vi
           fps,
           sampleRate,
           channels,
-          tbn
+          tbn,
+          videoStreamIndex,
+          audioStreamIndex
         });
       }
     });
@@ -177,7 +193,9 @@ export async function isNormalized(filePath: string, target: VideoConfig, ffmpeg
       fpsMatch &&
       current.sampleRate === target.sampleRate &&
       current.channels === target.channels &&
-      current.tbn === target.tbn
+      current.tbn === target.tbn &&
+      current.videoStreamIndex === target.videoStreamIndex &&
+      current.audioStreamIndex === target.audioStreamIndex
     );
   } catch (err) {
     console.error(`Error checking normalization for ${filePath}:`, err);
