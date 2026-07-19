@@ -21,7 +21,10 @@ export interface VideoConfig {
 export function getCleanedFfmpegPath(): string {
   let ffmpegPath = ffmpegPathRaw || 'ffmpeg';
   if (ffmpegPathRaw) {
-    const cleaned = ffmpegPathRaw.replace(/^\\ROOT|^ROOT|^\/ROOT/i, '');
+    if (fs.existsSync(ffmpegPathRaw)) {
+      return ffmpegPathRaw;
+    }
+    const cleaned = ffmpegPathRaw.replace(/^\\ROOT|^ROOT|^\/ROOT/, '');
     const relativePath = cleaned.startsWith('/') || cleaned.startsWith('\\') ? cleaned.slice(1) : cleaned;
     ffmpegPath = path.resolve(process.cwd(), relativePath);
   }
@@ -255,4 +258,34 @@ export function normalizeVideo(
       reject(err);
     });
   });
+}
+
+export function killLingeringFfmpegProcesses() {
+  const playlistName = 'temp_playlist.txt';
+  try {
+    if (process.platform === 'win32') {
+      // Find and kill processes on Windows with temp_playlist.txt in their command line
+      const psCommand = `powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = 'ffmpeg.exe'\\" | Where-Object { $_.CommandLine -like '*${playlistName}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`;
+      try {
+        execSync(psCommand, { stdio: 'ignore' });
+      } catch (err: any) {
+        console.warn('PowerShell process cleanup failed, attempting taskkill fallback...', err.message);
+        try {
+          execSync('taskkill /F /IM ffmpeg.exe', { stdio: 'ignore' });
+        } catch (tkErr) {
+          // ignore
+        }
+      }
+    } else {
+      // Find and kill processes on Linux/macOS
+      // Use pkill -9 -f to find processes with 'temp_playlist.txt' in their command line
+      try {
+        execSync(`pkill -9 -f "${playlistName}"`, { stdio: 'ignore' });
+      } catch (err) {
+        // pkill exits with 1 if no process matched, which is normal and expected
+      }
+    }
+  } catch (err: any) {
+    console.error('Error in killLingeringFfmpegProcesses:', err.message);
+  }
 }

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo } from '@/lib/video';
+import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses } from '@/lib/video';
 
 const configPath = path.join(process.cwd(), 'stream-config.json');
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -180,6 +180,9 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     (global as any).ffmpegProcess = null;
   }
 
+  // Kill any other lingering ffmpeg processes associated with this project
+  killLingeringFfmpegProcesses();
+
   let streamUrl = streamKey.trim();
   if (!streamUrl.startsWith('rtmp://') && !streamUrl.startsWith('rtmps://')) {
     streamUrl = `rtmps://iad05.contribute.live-video.net/app/${streamUrl}`;
@@ -349,6 +352,9 @@ export async function POST(request: Request) {
         }
         (global as any).ffmpegProcess = null;
       }
+
+      // Also clean up any orphan processes matching the playlist
+      killLingeringFfmpegProcesses();
 
       return NextResponse.json({ success: true, ...config });
 
