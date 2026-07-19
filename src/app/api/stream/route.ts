@@ -83,7 +83,7 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     } catch (err: any) {
       console.error(`Skipping invalid/corrupt playlist video "${videoName}":`, err.message);
       if (fs.existsSync(videoPath)) {
-        try { fs.unlinkSync(videoPath); } catch {}
+        try { fs.unlinkSync(videoPath); } catch { }
       }
       referenceVideoIndex++;
     }
@@ -123,7 +123,7 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     } catch (err: any) {
       console.error(`Removing invalid/corrupt video "${file}" from playlist:`, err.message);
       if (fs.existsSync(filePath)) {
-        try { fs.unlinkSync(filePath); } catch {}
+        try { fs.unlinkSync(filePath); } catch { }
       }
     }
   }
@@ -173,10 +173,11 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     '-f', 'concat',
     '-safe', '0',
     '-i', playlistFilePath,
+    '-map', '0:v',
+    '-map', '0:a',
     '-c:v', 'copy',
     '-c:a', 'copy',
     '-f', 'flv',
-    // 🚀 TIMEOUT PROTECTION: Tells the RTMP socket to fail/retry instead of hanging indefinitely
     streamUrl
   ];
 
