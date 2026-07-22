@@ -241,7 +241,7 @@ export async function getReferenceVideoName(uploadsDir: string, playlist?: strin
 export async function isNormalized(filePath: string, target: VideoConfig, ffmpegPath: string): Promise<boolean> {
   try {
     const current = await getVideoConfig(filePath, ffmpegPath);
-    return current.videoStreamIndex === 0 && current.audioStreamIndex === 1 && current.tbn === target.tbn;
+    return current.videoStreamIndex === 0 && current.audioStreamIndex === 1;
   } catch (err) {
     console.error(`Error checking normalization for ${filePath}:`, err);
     return false;
@@ -256,6 +256,21 @@ export function normalizeVideo(
   bitrate?: number,
   preset?: string
 ): Promise<void> {
+  const fileName = path.basename(filePath);
+  
+  if (fs.existsSync(filePath)) {
+    const stats = fs.statSync(filePath);
+    const freeSpace = getFreeDiskSpace(path.dirname(filePath));
+    const safetyMargin = 50 * 1024 * 1024; // 50MB
+    if (freeSpace < stats.size + safetyMargin) {
+      const errMsg = `Normalization aborted for "${fileName}": Insufficient VPS storage. Required: ${stats.size} bytes, Available: ${freeSpace} bytes.`;
+      console.error(`[Normalization Error] ${errMsg}`);
+      const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
+      fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Normalization ERROR] Aborted normalization for "${fileName}": Insufficient disk space. Required: ${stats.size} bytes, Available: ${freeSpace} bytes.\n`);
+      return Promise.reject(new Error(errMsg));
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const args = [
       '-y',
@@ -299,6 +314,18 @@ export function triggerNormalization(
 ): void {
   const uploadsDir = path.join(process.cwd(), 'uploads');
   const filePath = path.join(uploadsDir, fileName);
+
+  if (fs.existsSync(filePath)) {
+    const stats = fs.statSync(filePath);
+    const freeSpace = getFreeDiskSpace(uploadsDir);
+    const safetyMargin = 50 * 1024 * 1024; // 50MB
+    if (freeSpace < stats.size + safetyMargin) {
+      console.error(`[Background] Normalization aborted for "${fileName}": Insufficient disk space.`);
+      const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
+      fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Normalization ERROR] Aborted background normalization for "${fileName}": Insufficient disk space. Required: ${stats.size} bytes, Available: ${freeSpace} bytes.\n`);
+      return;
+    }
+  }
 
   if (!(global as any).activeNormalizations) {
     (global as any).activeNormalizations = new Set<string>();

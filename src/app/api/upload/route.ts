@@ -151,11 +151,12 @@ export async function POST(request: Request) {
 
       // Disk Space Safeguard check for legacy upload
       const freeSpace = getFreeDiskSpace(uploadsDir);
-      if (freeSpace < file.size) {
-        const errMsg = `Upload rejected: Insufficient disk space on VPS. File size: ${file.size} bytes, free space: ${freeSpace} bytes.`;
+      const requiredSpace = (file.size * 2) + 50 * 1024 * 1024;
+      if (freeSpace < requiredSpace) {
+        const errMsg = `Upload rejected: Insufficient disk space on VPS. Upload and normalization require ${requiredSpace} bytes, free space: ${freeSpace} bytes.`;
         console.error(`[Upload] ${errMsg}`);
         const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload ERROR] Legacy upload rejected: Insufficient disk space. Required: ${file.size} bytes, Available: ${freeSpace} bytes.\n`);
+        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload ERROR] Legacy upload rejected: Insufficient disk space. Required: ${requiredSpace} bytes, Available: ${freeSpace} bytes.\n`);
         return NextResponse.json({ error: errMsg }, { status: 507 });
       }
 
@@ -181,11 +182,12 @@ export async function POST(request: Request) {
     // 3. Disk Space Safeguard check (on first chunk)
     if (chunkIndex === 0 && totalSize > 0) {
       const freeSpace = getFreeDiskSpace(uploadsDir);
-      if (freeSpace < totalSize) {
-        const errMsg = `Upload rejected: Insufficient disk space on VPS. File size: ${totalSize} bytes, free space: ${freeSpace} bytes.`;
+      const requiredSpace = (totalSize * 2) + 50 * 1024 * 1024;
+      if (freeSpace < requiredSpace) {
+        const errMsg = `Upload rejected: Insufficient disk space on VPS. Upload and normalization require ${requiredSpace} bytes, free space: ${freeSpace} bytes.`;
         console.error(`[Upload] ${errMsg}`);
         const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload ERROR] Upload of "${fileName}" rejected: Insufficient disk space. Required: ${totalSize} bytes, Available: ${freeSpace} bytes.\n`);
+        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload ERROR] Upload of "${fileName}" rejected: Insufficient disk space. Required: ${requiredSpace} bytes, Available: ${freeSpace} bytes.\n`);
         return NextResponse.json({ error: errMsg }, { status: 507 });
       }
     }
