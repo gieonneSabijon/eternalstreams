@@ -108,7 +108,7 @@ export function getFfmpegDiagnostics(): string {
 
 export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<VideoConfig> {
   return new Promise((resolve, reject) => {
-    execFile(ffmpegPath, ['-hide_banner', '-i', filePath], (err, stdout, stderr) => {
+    execFile(ffmpegPath, ['-hide_banner', '-analyzeduration', '1000000', '-probesize', '1000000', '-i', filePath], (err, stdout, stderr) => {
       const output = stderr || '';
       const lines = output.split('\n');
 

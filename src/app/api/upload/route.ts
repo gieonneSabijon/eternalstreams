@@ -207,13 +207,15 @@ export async function POST(request: Request) {
     request.signal.addEventListener('abort', abortHandler);
 
     try {
-      const chunkBuffer = Buffer.from(await request.arrayBuffer());
+      const writeStream = fs.createWriteStream(tempPartFilePath, { flags: chunkIndex === 0 ? 'w' : 'a' });
+      const nodeStream = Readable.fromWeb(request.body as any);
+      nodeStream.pipe(writeStream);
 
-      if (chunkIndex === 0) {
-        fs.writeFileSync(tempPartFilePath, chunkBuffer);
-      } else {
-        fs.appendFileSync(tempPartFilePath, chunkBuffer);
-      }
+      await new Promise<void>((resolve, reject) => {
+        writeStream.on('finish', () => resolve());
+        writeStream.on('error', (err) => reject(err));
+        nodeStream.on('error', (err) => reject(err));
+      });
 
       // Check if this is the final chunk
       if (chunkIndex === totalChunks - 1) {
@@ -224,7 +226,10 @@ export async function POST(request: Request) {
         fs.renameSync(tempPartFilePath, finalFilePath);
         console.log(`[Upload] Completed upload of "${fileName}". Temporary part file renamed.`);
 
-        triggerBackgroundNormalizationAndConfigUpdate(fileName, finalFilePath);
+        // Offload to background using setImmediate
+        setImmediate(() => {
+          triggerBackgroundNormalizationAndConfigUpdate(fileName, finalFilePath);
+        });
       }
 
       return NextResponse.json({ success: true, chunkIndex, totalChunks });
