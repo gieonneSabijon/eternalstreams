@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization, getReferenceVideoName, safeAppendToLog, ensureStandardTrackOrder } from '@/lib/video';
+import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization, getReferenceVideoName, safeAppendToLog } from '@/lib/video';
+
 
 
 
@@ -63,6 +64,43 @@ export function writeConfig(config: any) {
   }
 }
 
+export async function writePlaylistFile(playlist: string[], uploadsDir: string, ffmpegPath: string): Promise<string> {
+  const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
+  const playlistLines = ['ffconcat version 1.0'];
+
+  for (const file of playlist) {
+    const videoPath = path.join(uploadsDir, file);
+    const absoluteVideoPath = videoPath.replace(/\\/g, '/');
+    playlistLines.push(`file '${absoluteVideoPath}'`);
+
+    try {
+      const vidConfig = await getVideoConfig(videoPath, ffmpegPath);
+      // Map Video stream to output index 0
+      if (vidConfig.videoStreamIndex !== null && vidConfig.videoStreamIndex !== undefined) {
+        const videoIdHex = '0x' + (vidConfig.videoStreamIndex + 1).toString(16);
+        playlistLines.push('stream');
+        playlistLines.push(`exact_stream_id ${videoIdHex}`);
+      }
+      // Map Audio stream to output index 1
+      if (vidConfig.audioStreamIndex !== null && vidConfig.audioStreamIndex !== undefined) {
+        const audioIdHex = '0x' + (vidConfig.audioStreamIndex + 1).toString(16);
+        playlistLines.push('stream');
+        playlistLines.push(`exact_stream_id ${audioIdHex}`);
+      }
+    } catch (e) {
+      console.error(`Failed to get video config for exact stream mapping of ${file}:`, e);
+      playlistLines.push('stream');
+      playlistLines.push('exact_stream_id 0x1');
+      playlistLines.push('stream');
+      playlistLines.push('exact_stream_id 0x2');
+    }
+  }
+
+  const playlistContent = playlistLines.join('\n');
+  fs.writeFileSync(playlistFilePath, playlistContent);
+  return playlistContent;
+}
+
 export async function ensurePlaylistNormalized(config: any, uploadsDir: string, ffmpegPath: string): Promise<string[]> {
   let targetConfig = null;
   let referenceVideoName = await getReferenceVideoName(uploadsDir, config.playlist);
@@ -72,7 +110,6 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
     const videoPath = path.join(uploadsDir, referenceVideoName);
     try {
       if (fs.existsSync(videoPath)) {
-        await ensureStandardTrackOrder(videoPath, ffmpegPath);
         targetConfig = await getVideoConfig(videoPath, ffmpegPath);
         referenceVideoIndex = config.playlist.indexOf(referenceVideoName);
       }
@@ -91,8 +128,6 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
     const filePath = path.join(uploadsDir, file);
     try {
       if (!fs.existsSync(filePath)) continue;
-
-      await ensureStandardTrackOrder(filePath, ffmpegPath);
 
       const current = await getVideoConfig(filePath, ffmpegPath);
       const fpsMatch = Math.abs(current.fps - targetConfig.fps) < 0.5;
@@ -167,17 +202,9 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
   config.targetConfig = targetConfig;
   writeConfig(config);
 
-  // 🚀 FIX: Convert to absolute structural paths so Linux FFmpeg won't disconnect silently
+  // 🚀 FIX: Convert to absolute structural paths with exact stream mappings
   const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
-  const playlistContent = [
-    'ffconcat version 1.0',
-    ...config.playlist.map((file: string) => {
-      const absoluteVideoPath = path.join(uploadsDir, file).replace(/\\/g, '/');
-      return `file '${absoluteVideoPath}'`;
-    })
-  ].join('\n');
-
-  fs.writeFileSync(playlistFilePath, playlistContent);
+  const playlistContent = await writePlaylistFile(config.playlist, uploadsDir, ffmpegPath);
 
   // Kill any active ffmpeg session by PID first
   if (config.pid && isProcessAlive(config.pid)) {
@@ -432,17 +459,9 @@ export async function POST(request: Request) {
               ensurePlaylistNormalized(config, uploadsDir, ffmpegPath); // Runs in background
             }
 
-            // 🚀 FIX: Convert reorder content to absolute path lines as well
-            const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
-            const playlistContent = [
-              'ffconcat version 1.0',
-              ...playlist.map((file: string) => {
-                const absoluteVideoPath = path.join(uploadsDir, file).replace(/\\/g, '/');
-                return `file '${absoluteVideoPath}'`;
-              })
-            ].join('\n');
-
-            fs.writeFileSync(playlistFilePath, playlistContent);
+            // 🚀 FIX: Convert reorder content to absolute path lines with exact stream mapping
+            const ffmpegPath = getFfmpegCommand();
+            await writePlaylistFile(playlist, uploadsDir, ffmpegPath);
           }
         }
 
@@ -540,16 +559,9 @@ export async function POST(request: Request) {
               ensurePlaylistNormalized(config, uploadsDir, ffmpegPath); // Runs in background
             }
 
-            // Write playlist file
-            const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
-            const playlistContent = [
-              'ffconcat version 1.0',
-              ...updatedPlaylist.map((file: string) => {
-                const absoluteVideoPath = path.join(uploadsDir, file).replace(/\\/g, '/');
-                return `file '${absoluteVideoPath}'`;
-              })
-            ].join('\n');
-            fs.writeFileSync(playlistFilePath, playlistContent);
+            // Write playlist file with exact stream mapping
+            const ffmpegPath = getFfmpegCommand();
+            await writePlaylistFile(updatedPlaylist, uploadsDir, ffmpegPath);
           }
         } else if (config.status === 'live' && updatedPlaylist.length === 0) {
           // Live but no videos left
