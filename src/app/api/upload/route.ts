@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
-import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization, getReferenceVideoName, getFreeDiskSpace, safeAppendToLog } from '@/lib/video';
+import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization, getReferenceVideoName, getFreeDiskSpace, safeAppendToLog, ensureStandardTrackOrder } from '@/lib/video';
+
 
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -14,6 +15,9 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
   (async () => {
     const ffmpegPath = getFfmpegCommand();
     try {
+      // Swapping track order immediately upon upload if needed!
+      await ensureStandardTrackOrder(filePath, ffmpegPath);
+
       // 1. Validate the video file first to ensure it's not corrupt (e.g. missing moov atom)
       let videoConfig;
       try {
