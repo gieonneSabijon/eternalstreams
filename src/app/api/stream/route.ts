@@ -89,11 +89,11 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
     const filePath = path.join(uploadsDir, file);
     try {
       if (!fs.existsSync(filePath)) continue;
-      
+
       const current = await getVideoConfig(filePath, ffmpegPath);
       const fpsMatch = Math.abs(current.fps - targetConfig.fps) < 0.5;
       const isVideoH264 = current.codecVideo.includes('h264') || current.codecVideo.includes('avc');
-      const isCompatible = 
+      const isCompatible =
         current.width === targetConfig.width &&
         current.height === targetConfig.height &&
         fpsMatch &&
@@ -101,14 +101,14 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
 
       if (!isCompatible) {
         console.error(`[Sync/Check] Removing video "${file}" due to parameter/codec mismatch.`);
-        
+
         const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
         try {
           fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Playlist ERROR] Video "${file}" removed from queue. Resolution/FPS (${current.width}x${current.height}, ${current.fps} fps, codec: ${current.codecVideo}) or codec does not match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps, codec: ${targetConfig.codecVideo}).\n`);
         } catch (logErr) {
           // ignore log write errors
         }
-        
+
         config.playlist = config.playlist.filter((name: string) => name !== file);
         playlistModified = true;
         continue;
@@ -254,6 +254,7 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
 
   // Spawn real static ffmpeg process with global loops enabled
   const args = [
+    '-err_detect', 'ignore_err',
     '-stream_loop', '-1',     // Tells FFmpeg to loop 
     '-re',
     '-fflags', '+genpts',
@@ -268,6 +269,8 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     '-ar', targetConfig.sampleRate.toString(),
     '-ac', targetConfig.channels.toString(),
     '-af', 'aresample=async=1',
+    '-max_muxing_queue_size', '1024',
+    '-flvflags no_duration_filesize',
     '-f', 'flv',
     streamUrl
   ];
