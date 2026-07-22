@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization } from '@/lib/video';
+import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization, getReferenceVideoName } from '@/lib/video';
 
 const configPath = path.join(process.cwd(), 'stream-config.json');
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -66,46 +66,59 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
   const activeNormalizations = (global as any).activeNormalizations || new Set<string>();
 
   let targetConfig = null;
-  let referenceVideoIndex = 0;
+  let referenceVideoName = await getReferenceVideoName(uploadsDir, config.playlist);
+  let referenceVideoIndex = -1;
 
-  while (referenceVideoIndex < config.playlist.length) {
-    const videoName = config.playlist[referenceVideoIndex];
-    const videoPath = path.join(uploadsDir, videoName);
+  if (referenceVideoName) {
+    const videoPath = path.join(uploadsDir, referenceVideoName);
     try {
-      if (!fs.existsSync(videoPath)) {
-        throw new Error('File does not exist on disk');
+      if (fs.existsSync(videoPath)) {
+        targetConfig = await getVideoConfig(videoPath, ffmpegPath);
+        referenceVideoIndex = config.playlist.indexOf(referenceVideoName);
       }
-      targetConfig = await getVideoConfig(videoPath, ffmpegPath);
-      break;
     } catch (err: any) {
-      referenceVideoIndex++;
+      console.error(`[Ensure] Mismatched/corrupt reference video "${referenceVideoName}":`, err.message);
     }
   }
 
-  if (!targetConfig) {
+  if (!targetConfig || !referenceVideoName) {
     return [];
   }
 
   if (targetConfig.videoStreamIndex !== 0 || targetConfig.audioStreamIndex !== 1) {
-    const refVideoName = config.playlist[referenceVideoIndex];
-    if (activeNormalizations.has(refVideoName)) {
-      normalizingList.push(refVideoName);
+    if (activeNormalizations.has(referenceVideoName)) {
+      normalizingList.push(referenceVideoName);
     } else {
       const standardTargetConfig = {
         ...targetConfig,
         videoStreamIndex: 0,
         audioStreamIndex: 1
       };
-      triggerNormalization(refVideoName, standardTargetConfig, ffmpegPath, config.bitrate, config.preset);
-      normalizingList.push(refVideoName);
+      triggerNormalization(referenceVideoName, standardTargetConfig, ffmpegPath, config.bitrate, config.preset);
+      normalizingList.push(referenceVideoName);
     }
   }
 
+  let playlistModified = false;
   for (let i = referenceVideoIndex + 1; i < config.playlist.length; i++) {
     const file = config.playlist[i];
     const filePath = path.join(uploadsDir, file);
     try {
       if (!fs.existsSync(filePath)) continue;
+      
+      const current = await getVideoConfig(filePath, ffmpegPath);
+      const fpsMatch = Math.abs(current.fps - targetConfig.fps) < 0.5;
+
+      if (current.width !== targetConfig.width || current.height !== targetConfig.height || !fpsMatch) {
+        console.error(`[Sync/Check] Removing video "${file}" due to resolution/FPS mismatch.`);
+        
+        const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
+        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Playlist ERROR] Video "${file}" removed from queue. Resolution/FPS (${current.width}x${current.height}, ${current.fps} fps) does not match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps).\n`);
+        
+        config.playlist = config.playlist.filter((name: string) => name !== file);
+        playlistModified = true;
+        continue;
+      }
       
       const isNorm = await isNormalized(filePath, targetConfig, ffmpegPath);
       if (!isNorm) {
@@ -119,6 +132,10 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
     } catch (err) {
       console.error(`Error checking normalized status for ${file}:`, err);
     }
+  }
+
+  if (playlistModified) {
+    writeConfig(config);
   }
 
   return normalizingList;

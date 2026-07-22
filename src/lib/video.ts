@@ -186,20 +186,25 @@ export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<Vi
   });
 }
 
+export async function getReferenceVideoName(uploadsDir: string, playlist?: string[]): Promise<string | null> {
+  if (playlist && playlist.length > 0) {
+    return playlist[0];
+  }
+  if (fs.existsSync(uploadsDir)) {
+    const files = fs.readdirSync(uploadsDir)
+      .filter((f) => !f.startsWith('temp_') && !f.endsWith('.tmp.mp4'))
+      .sort((a, b) => a.localeCompare(b));
+    if (files.length > 0) {
+      return files[0];
+    }
+  }
+  return null;
+}
+
 export async function isNormalized(filePath: string, target: VideoConfig, ffmpegPath: string): Promise<boolean> {
   try {
     const current = await getVideoConfig(filePath, ffmpegPath);
-    const fpsMatch = Math.abs(current.fps - target.fps) < 0.5;
-    return (
-      current.width === target.width &&
-      current.height === target.height &&
-      fpsMatch &&
-      current.sampleRate === target.sampleRate &&
-      current.channels === target.channels &&
-      current.tbn === target.tbn &&
-      current.videoStreamIndex === target.videoStreamIndex &&
-      current.audioStreamIndex === target.audioStreamIndex
-    );
+    return current.videoStreamIndex === 0 && current.audioStreamIndex === 1;
   } catch (err) {
     console.error(`Error checking normalization for ${filePath}:`, err);
     return false;
@@ -296,28 +301,14 @@ export function triggerNormalization(
         try { fs.unlinkSync(tempPath); } catch {}
       }
 
-      const finalBitrate = bitrate ? `${bitrate}k` : '2500k';
-      const finalBufsize = bitrate ? `${bitrate * 2}k` : '5000k';
-      const finalPreset = preset || 'ultrafast';
-      const scaleFilter = `scale=${targetConfig.width}:${targetConfig.height}:force_original_aspect_ratio=decrease,pad=${targetConfig.width}:${targetConfig.height}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
-      
       const args = [
         '-y',
         '-nostdin',
         '-i', filePath,
-        '-vf', scaleFilter,
-        '-r', targetConfig.fps.toString(),
-        '-c:v', 'libx264',
-        '-preset', finalPreset,
-        '-threads', '2',
-        '-b:v', finalBitrate,
-        '-maxrate', finalBitrate,
-        '-bufsize', finalBufsize,
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-ar', targetConfig.sampleRate.toString(),
-        '-ac', targetConfig.channels.toString(),
-        '-video_track_timescale', targetConfig.tbn.toString(),
+        '-map', '0:v:0',
+        '-map', '0:a:0?',
+        '-c', 'copy',
+        '-movflags', '+faststart',
         tempPath
       ];
 
@@ -389,5 +380,43 @@ export function killLingeringFfmpegProcesses() {
     }
   } catch (err: any) {
     console.error('Error in killLingeringFfmpegProcesses:', err.message);
+  }
+}
+
+// Register exit hooks to prevent zombie processes
+if (typeof window === 'undefined') {
+  if (!(global as any).hasRegisteredExitHooks) {
+    (global as any).hasRegisteredExitHooks = true;
+
+    const cleanupAllProcesses = () => {
+      console.log('[System Cleanup] Cleaning up child processes before exit...');
+      const ffmpegProcess = (global as any).ffmpegProcess;
+      if (ffmpegProcess) {
+        try {
+          ffmpegProcess.kill('SIGKILL');
+          console.log('[System Cleanup] Terminated live stream process.');
+        } catch (e) {}
+      }
+      const normalizationProcesses = (global as any).normalizationProcesses;
+      if (normalizationProcesses) {
+        for (const [fileName, child] of normalizationProcesses.entries()) {
+          try {
+            child.kill('SIGKILL');
+            console.log(`[System Cleanup] Terminated normalization for "${fileName}".`);
+          } catch (e) {}
+        }
+        normalizationProcesses.clear();
+      }
+    };
+
+    process.on('exit', cleanupAllProcesses);
+    process.on('SIGINT', () => {
+      cleanupAllProcesses();
+      process.exit(0);
+    });
+    process.on('SIGTERM', () => {
+      cleanupAllProcesses();
+      process.exit(0);
+    });
   }
 }

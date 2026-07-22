@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
-import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization } from '@/lib/video';
+import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization, getReferenceVideoName } from '@/lib/video';
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const configPath = path.join(process.cwd(), 'stream-config.json');
@@ -14,8 +14,9 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
     const ffmpegPath = getFfmpegCommand();
     try {
       // 1. Validate the video file first to ensure it's not corrupt (e.g. missing moov atom)
+      let videoConfig;
       try {
-        await getVideoConfig(filePath, ffmpegPath);
+        videoConfig = await getVideoConfig(filePath, ffmpegPath);
       } catch (validationErr: any) {
         console.error(`[Background] Validation failed for uploaded file "${fileName}" (corrupt or invalid video):`, validationErr);
         if (fs.existsSync(filePath)) {
@@ -28,7 +29,40 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
         const configData = fs.readFileSync(configPath, 'utf-8');
         const config = JSON.parse(configData);
 
-        // 2. Append to playlist immediately
+        // Retrieve targetConfig from reference video if not set
+        let targetConfig = config.targetConfig;
+        if (!targetConfig) {
+          const refVideoName = await getReferenceVideoName(uploadsDir, config.playlist);
+          if (refVideoName) {
+            const refVideoPath = path.join(uploadsDir, refVideoName);
+            if (fs.existsSync(refVideoPath)) {
+              try {
+                targetConfig = await getVideoConfig(refVideoPath, ffmpegPath);
+                config.targetConfig = targetConfig;
+              } catch (err) {
+                console.error(`[Background] Failed to get targetConfig from reference:`, err);
+              }
+            }
+          }
+        }
+
+        // Verify that the resolution and FPS match the reference config
+        if (targetConfig) {
+          const fpsMatch = Math.abs(videoConfig.fps - targetConfig.fps) < 0.5;
+          if (videoConfig.width !== targetConfig.width || videoConfig.height !== targetConfig.height || !fpsMatch) {
+            console.error(`[Background] Validation failed for "${fileName}": Resolution/FPS mismatch.`);
+            
+            const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
+            fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload Validation ERROR] Video "${fileName}" rejected. Resolution/FPS (${videoConfig.width}x${videoConfig.height}, ${videoConfig.fps} fps) must match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps).\n`);
+            
+            if (fs.existsSync(filePath)) {
+              fs.unlinkSync(filePath);
+            }
+            return; // Terminate early (do not add to playlist)
+          }
+        }
+
+        // Append to playlist immediately
         if (!Array.isArray(config.playlist)) {
           config.playlist = [];
         }
@@ -36,25 +70,10 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
           config.playlist.push(fileName);
         }
 
-        // 3. Determine targetConfig from reference video if not set
-        let targetConfig = config.targetConfig;
-        if (!targetConfig && config.playlist.length > 0) {
-          const firstVideoName = config.playlist[0];
-          const firstVideoPath = path.join(uploadsDir, firstVideoName);
-          if (fs.existsSync(firstVideoPath)) {
-            try {
-              targetConfig = await getVideoConfig(firstVideoPath, ffmpegPath);
-              config.targetConfig = targetConfig;
-            } catch (err) {
-              console.error(`[Background] Failed to get targetConfig from reference:`, err);
-            }
-          }
-        }
-
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
         console.log(`[Background] Appended "${fileName}" to playlist config`);
 
-        // 4. Trigger background normalization if targetConfig is available
+        // Trigger background normalization if targetConfig is available
         if (targetConfig) {
           const isNorm = await isNormalized(filePath, targetConfig, ffmpegPath);
           if (isNorm) {
