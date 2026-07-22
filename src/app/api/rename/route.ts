@@ -36,6 +36,11 @@ async function handleRename(request: Request) {
       return NextResponse.json({ error: 'Source file not found' }, { status: 404 });
     }
 
+    const activeNormalizations = (global as any).activeNormalizations;
+    if (activeNormalizations && activeNormalizations.has(oldName)) {
+      return NextResponse.json({ error: 'Cannot rename file while it is being normalized. Please wait for normalization to complete.' }, { status: 409 });
+    }
+
     if (fs.existsSync(newPath)) {
       return NextResponse.json({ error: 'A file with the new name already exists' }, { status: 409 });
     }

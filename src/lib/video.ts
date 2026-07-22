@@ -222,6 +222,7 @@ export function normalizeVideo(
     const scaleFilter = `scale=${target.width}:${target.height}:force_original_aspect_ratio=decrease,pad=${target.width}:${target.height}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
     const args = [
       '-y',
+      '-nostdin',
       '-i', filePath,
       '-vf', scaleFilter,
       '-r', target.fps.toString(),
@@ -258,6 +259,107 @@ export function normalizeVideo(
       reject(err);
     });
   });
+}
+
+export function triggerNormalization(
+  fileName: string,
+  targetConfig: VideoConfig,
+  ffmpegPath: string,
+  bitrate?: number,
+  preset?: string
+): void {
+  const uploadsDir = path.join(process.cwd(), 'uploads');
+  const filePath = path.join(uploadsDir, fileName);
+
+  if (!(global as any).activeNormalizations) {
+    (global as any).activeNormalizations = new Set<string>();
+  }
+  if (!(global as any).normalizationProcesses) {
+    (global as any).normalizationProcesses = new Map<string, any>();
+  }
+
+  const activeNormalizations = (global as any).activeNormalizations as Set<string>;
+  const normalizationProcesses = (global as any).normalizationProcesses as Map<string, any>;
+
+  if (activeNormalizations.has(fileName)) {
+    console.log(`[Background] Normalization already active for "${fileName}". Skipping duplicate trigger.`);
+    return;
+  }
+
+  activeNormalizations.add(fileName);
+  console.log(`[Background] Triggered normalization for "${fileName}"`);
+
+  (async () => {
+    const tempPath = filePath + '.tmp.mp4';
+    try {
+      if (fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch {}
+      }
+
+      const finalBitrate = bitrate ? `${bitrate}k` : '2500k';
+      const finalBufsize = bitrate ? `${bitrate * 2}k` : '5000k';
+      const finalPreset = preset || 'ultrafast';
+      const scaleFilter = `scale=${targetConfig.width}:${targetConfig.height}:force_original_aspect_ratio=decrease,pad=${targetConfig.width}:${targetConfig.height}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+      
+      const args = [
+        '-y',
+        '-nostdin',
+        '-i', filePath,
+        '-vf', scaleFilter,
+        '-r', targetConfig.fps.toString(),
+        '-c:v', 'libx264',
+        '-preset', finalPreset,
+        '-threads', '2',
+        '-b:v', finalBitrate,
+        '-maxrate', finalBitrate,
+        '-bufsize', finalBufsize,
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-ar', targetConfig.sampleRate.toString(),
+        '-ac', targetConfig.channels.toString(),
+        '-video_track_timescale', targetConfig.tbn.toString(),
+        tempPath
+      ];
+
+      const child = spawn(ffmpegPath, args);
+      normalizationProcesses.set(fileName, child);
+
+      let stderr = '';
+      child.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        child.on('close', (code) => {
+          normalizationProcesses.delete(fileName);
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`ffmpeg exited with code ${code}. Stderr: ${stderr}`));
+          }
+        });
+        child.on('error', (err) => {
+          normalizationProcesses.delete(fileName);
+          reject(err);
+        });
+      });
+
+      if (fs.existsSync(tempPath)) {
+        fs.unlinkSync(filePath);
+        fs.renameSync(tempPath, filePath);
+        console.log(`[Background] Successfully normalized: ${fileName}`);
+      } else {
+        throw new Error('Normalization output file was not created');
+      }
+    } catch (err: any) {
+      console.error(`[Background] Normalization failed for "${fileName}":`, err.message);
+      if (fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch {}
+      }
+    } finally {
+      activeNormalizations.delete(fileName);
+    }
+  })();
 }
 
 export function killLingeringFfmpegProcesses() {

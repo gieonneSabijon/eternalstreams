@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses } from '@/lib/video';
+import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization } from '@/lib/video';
 
 const configPath = path.join(process.cwd(), 'stream-config.json');
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -59,6 +59,69 @@ export function writeConfig(config: any) {
   } catch (error) {
     console.error('Error writing config:', error);
   }
+}
+
+export async function ensurePlaylistNormalized(config: any, uploadsDir: string, ffmpegPath: string): Promise<string[]> {
+  const normalizingList: string[] = [];
+  const activeNormalizations = (global as any).activeNormalizations || new Set<string>();
+
+  let targetConfig = null;
+  let referenceVideoIndex = 0;
+
+  while (referenceVideoIndex < config.playlist.length) {
+    const videoName = config.playlist[referenceVideoIndex];
+    const videoPath = path.join(uploadsDir, videoName);
+    try {
+      if (!fs.existsSync(videoPath)) {
+        throw new Error('File does not exist on disk');
+      }
+      targetConfig = await getVideoConfig(videoPath, ffmpegPath);
+      break;
+    } catch (err: any) {
+      referenceVideoIndex++;
+    }
+  }
+
+  if (!targetConfig) {
+    return [];
+  }
+
+  if (targetConfig.videoStreamIndex !== 0 || targetConfig.audioStreamIndex !== 1) {
+    const refVideoName = config.playlist[referenceVideoIndex];
+    if (activeNormalizations.has(refVideoName)) {
+      normalizingList.push(refVideoName);
+    } else {
+      const standardTargetConfig = {
+        ...targetConfig,
+        videoStreamIndex: 0,
+        audioStreamIndex: 1
+      };
+      triggerNormalization(refVideoName, standardTargetConfig, ffmpegPath, config.bitrate, config.preset);
+      normalizingList.push(refVideoName);
+    }
+  }
+
+  for (let i = referenceVideoIndex + 1; i < config.playlist.length; i++) {
+    const file = config.playlist[i];
+    const filePath = path.join(uploadsDir, file);
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      
+      const isNorm = await isNormalized(filePath, targetConfig, ffmpegPath);
+      if (!isNorm) {
+        if (activeNormalizations.has(file)) {
+          normalizingList.push(file);
+        } else {
+          triggerNormalization(file, targetConfig, ffmpegPath, config.bitrate, config.preset);
+          normalizingList.push(file);
+        }
+      }
+    } catch (err) {
+      console.error(`Error checking normalized status for ${file}:`, err);
+    }
+  }
+
+  return normalizingList;
 }
 
 export async function startBroadcastHelper(streamKey: string, config: any) {
@@ -327,6 +390,12 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `Some playlist files are missing on server: ${missingFiles.join(', ')}` }, { status: 400 });
       }
 
+      const ffmpegPath = getFfmpegCommand();
+      const normalizingList = await ensurePlaylistNormalized(config, uploadsDir, ffmpegPath);
+      if (normalizingList.length > 0) {
+        return NextResponse.json({ error: `Some videos in the playlist need to be normalized to match the reference format: ${normalizingList.join(', ')}. Normalization has been started in the background. Please wait a moment and try again.` }, { status: 400 });
+      }
+
       try {
         const updatedConfig = await startBroadcastHelper(streamKey, config);
         return NextResponse.json({ success: true, ...updatedConfig });
@@ -393,24 +462,7 @@ export async function POST(request: Request) {
           } else {
             if (config.targetConfig) {
               const ffmpegPath = getFfmpegCommand();
-              for (const file of playlist) {
-                const filePath = path.join(uploadsDir, file);
-                try {
-                  const isNorm = await isNormalized(filePath, config.targetConfig, ffmpegPath);
-                  if (!isNorm) {
-                    console.log(`Dynamic normalization: Normalizing reordered video "${file}" to match live targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
-                    const tempPath = filePath + '.tmp.mp4';
-                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath, config.bitrate, config.preset);
-                    if (fs.existsSync(tempPath)) {
-                      fs.unlinkSync(filePath);
-                      fs.renameSync(tempPath, filePath);
-                      console.log(`Successfully normalized "${file}"`);
-                    }
-                  }
-                } catch (err) {
-                  console.error(`Failed to dynamically normalize reordered file "${file}":`, err);
-                }
-              }
+              ensurePlaylistNormalized(config, uploadsDir, ffmpegPath); // Runs in background
             }
 
             // 🚀 FIX: Convert reorder content to absolute path lines as well
@@ -488,6 +540,12 @@ export async function POST(request: Request) {
 
         writeConfig(config);
 
+        // If offline and there are playlist files, make sure we normalize them to reference config in background
+        if (config.status !== 'live' && config.playlist.length > 0) {
+          const ffmpegPath = getFfmpegCommand();
+          ensurePlaylistNormalized(config, uploadsDir, ffmpegPath); // Runs in background
+        }
+
         // If the stream is live, handle potential adjustments
         if (config.status === 'live' && updatedPlaylist.length > 0) {
           const newFirstVideo = updatedPlaylist[0];
@@ -512,23 +570,7 @@ export async function POST(request: Request) {
             // Check & normalize other files to match targetConfig
             if (config.targetConfig) {
               const ffmpegPath = getFfmpegCommand();
-              for (const file of updatedPlaylist) {
-                const filePath = path.join(uploadsDir, file);
-                try {
-                  const isNorm = await isNormalized(filePath, config.targetConfig, ffmpegPath);
-                  if (!isNorm) {
-                    console.log(`[Sync] Normalizing video "${file}"`);
-                    const tempPath = filePath + '.tmp.mp4';
-                    await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath, config.bitrate, config.preset);
-                    if (fs.existsSync(tempPath)) {
-                      fs.unlinkSync(filePath);
-                      fs.renameSync(tempPath, filePath);
-                    }
-                  }
-                } catch (err) {
-                  console.error(`[Sync] Failed to normalize "${file}":`, err);
-                }
-              }
+              ensurePlaylistNormalized(config, uploadsDir, ffmpegPath); // Runs in background
             }
 
             // Write playlist file

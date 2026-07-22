@@ -77,6 +77,7 @@ export default function EternalStreamDashboard() {
   const [logs, setLogs] = useState<string>("");
   const [isRefreshingLogs, setIsRefreshingLogs] = useState<boolean>(false);
   const [isSyncingConfig, setIsSyncingConfig] = useState<boolean>(false);
+  const [normalizingFiles, setNormalizingFiles] = useState<string[]>([]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -100,6 +101,11 @@ export default function EternalStreamDashboard() {
         }
         if (data.tempFiles) {
           setTempFiles(data.tempFiles);
+        }
+        if (data.normalizing) {
+          setNormalizingFiles(data.normalizing);
+        } else {
+          setNormalizingFiles([]);
         }
       } else {
         showToast("Could not retrieve media files from server storage.", "error");
@@ -208,6 +214,19 @@ export default function EternalStreamDashboard() {
       if (interval) clearInterval(interval);
     };
   }, [status]);
+
+  // Poll files list when files are being normalized
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (normalizingFiles.length > 0) {
+      interval = setInterval(() => {
+        refreshFiles();
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [normalizingFiles]);
 
   // Format bytes helper
   const formatBytes = (bytes: number) => {
@@ -711,6 +730,12 @@ export default function EternalStreamDashboard() {
                               <div className="truncate">
                                 <div className="font-semibold text-sm text-zinc-100 truncate flex items-center gap-2">
                                   <span className="truncate">{file.name}</span>
+                                  {normalizingFiles.includes(file.name) && (
+                                    <span className="inline-flex items-center gap-1 text-[10px] bg-twitch-purple/20 text-twitch-purple px-1.5 py-0.5 rounded border border-twitch-purple/30 font-bold shrink-0 animate-pulse">
+                                      <Loader2 className="w-2.5 h-2.5 animate-spin text-twitch-purple" />
+                                      Normalizing...
+                                    </span>
+                                  )}
                                 </div>
                                 <div className="text-xs text-zinc-500 font-medium mt-0.5">
                                   Size: {formatBytes(file.size)}
@@ -724,21 +749,31 @@ export default function EternalStreamDashboard() {
                             <div className="flex items-center gap-1.5 shrink-0">
                               <button
                                 id={`rename-btn-${file.name}`}
-                                onClick={() => startRename(file.name)}
+                                onClick={() => !normalizingFiles.includes(file.name) && startRename(file.name)}
                                 onMouseDown={(e) => e.stopPropagation()}
                                 draggable={false}
-                                className="p-2 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white transition-all duration-200"
-                                title="Rename File"
+                                disabled={normalizingFiles.includes(file.name)}
+                                className={`p-2 rounded transition-all duration-200 ${
+                                  normalizingFiles.includes(file.name)
+                                    ? "opacity-35 cursor-not-allowed text-zinc-600"
+                                    : "hover:bg-zinc-800 text-zinc-400 hover:text-white"
+                                }`}
+                                title={normalizingFiles.includes(file.name) ? "File is normalizing..." : "Rename File"}
                               >
                                 <Pencil className="w-4.5 h-4.5" />
                               </button>
                               <button
                                 id={`delete-btn-${file.name}`}
-                                onClick={() => setDeletingFile(file.name)}
+                                onClick={() => !normalizingFiles.includes(file.name) && setDeletingFile(file.name)}
                                 onMouseDown={(e) => e.stopPropagation()}
                                 draggable={false}
-                                className="p-2 hover:bg-zinc-800 rounded text-zinc-400 hover:text-twitch-crimson transition-all duration-200"
-                                title="Delete File"
+                                disabled={normalizingFiles.includes(file.name)}
+                                className={`p-2 rounded transition-all duration-200 ${
+                                  normalizingFiles.includes(file.name)
+                                    ? "opacity-35 cursor-not-allowed text-zinc-600"
+                                    : "hover:bg-zinc-805 text-zinc-400 hover:text-twitch-crimson"
+                                }`}
+                                title={normalizingFiles.includes(file.name) ? "File is normalizing..." : "Delete File"}
                               >
                                 <Trash2 className="w-4.5 h-4.5" />
                               </button>
@@ -1024,8 +1059,11 @@ export default function EternalStreamDashboard() {
                             key={file.name}
                             className="flex items-center justify-between text-xs text-zinc-300 bg-twitch-bg-light/40 px-3 py-2.5 rounded border border-zinc-850/60 truncate hover:bg-twitch-bg-light/65 transition-colors"
                           >
-                            <span className="truncate max-w-[170px] font-bold text-zinc-200">
-                              {idx + 1}. {file.name}
+                            <span className="truncate max-w-[170px] font-bold text-zinc-200 flex items-center gap-1.5">
+                              {idx + 1}. <span className="truncate">{file.name}</span>
+                              {normalizingFiles.includes(file.name) && (
+                                <Loader2 className="w-3 h-3 animate-spin text-twitch-purple shrink-0" />
+                              )}
                             </span>
                             <span className="text-[10px] text-zinc-500 font-semibold shrink-0 ml-1">
                               {formatBytes(file.size)}
@@ -1037,6 +1075,13 @@ export default function EternalStreamDashboard() {
                   </div>
 
                 </div>
+
+                {normalizingFiles.length > 0 && status === "offline" && (
+                  <div className="flex items-center gap-2.5 p-3.5 bg-twitch-purple/10 border border-twitch-purple/35 rounded-xl text-xs text-twitch-purple-light font-semibold animate-pulse">
+                    <Loader2 className="w-4 h-4 animate-spin text-twitch-purple shrink-0" />
+                    <span>Background video normalization in progress... Stream can start once completed.</span>
+                  </div>
+                )}
 
                 {/* Macro Call-to-action Button */}
                 <button

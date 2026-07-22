@@ -82,8 +82,30 @@ export async function DELETE(request: Request) {
       await new Promise(resolve => setTimeout(resolve, 500));
     }
 
+    // Kill any active normalization process for this file
+    const activeNormalizations = (global as any).activeNormalizations;
+    const normalizationProcesses = (global as any).normalizationProcesses;
+    if (normalizationProcesses && normalizationProcesses.has(fileName)) {
+      console.log(`Killing active normalization process for deleted file "${fileName}"...`);
+      const child = normalizationProcesses.get(fileName);
+      if (child) {
+        try { child.kill('SIGKILL'); } catch (e) { console.error('Error killing normalization:', e); }
+      }
+      normalizationProcesses.delete(fileName);
+    }
+    if (activeNormalizations) {
+      activeNormalizations.delete(fileName);
+    }
+
+    const tempPath = filePath + '.tmp.mp4';
+    if (fs.existsSync(tempPath)) {
+      try { fs.unlinkSync(tempPath); } catch {}
+    }
+
     // Delete the file from disk
-    fs.unlinkSync(filePath);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
 
     // Update config to remove file from playlist
     if (config) {

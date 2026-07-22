@@ -87,13 +87,18 @@ export async function GET() {
 
     const storage = await getStorageSpace();
 
+    const activeNormalizations = (global as any).activeNormalizations
+      ? Array.from((global as any).activeNormalizations as Set<string>)
+      : [];
+
     return NextResponse.json({
       files: fileList,
       storage,
       tempFiles: {
         count: tempCount,
         size: tempSize
-      }
+      },
+      normalizing: activeNormalizations
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'Failed to list files' }, { status: 500 });

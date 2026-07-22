@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
-import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig } from '@/lib/video';
+import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization } from '@/lib/video';
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const configPath = path.join(process.cwd(), 'stream-config.json');
@@ -28,47 +28,44 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
         const configData = fs.readFileSync(configPath, 'utf-8');
         const config = JSON.parse(configData);
 
-        // 2. If live stream is running, dynamically normalize the uploaded file to match the stream configuration
-        if (config.status === 'live' && config.targetConfig) {
-          // Check if already normalized to bypass expensive transcoding
-          const isNorm = await isNormalized(filePath, config.targetConfig, ffmpegPath);
-          if (isNorm) {
-            console.log(`[Background] Uploaded file "${fileName}" is already normalized to match stream configuration. Skipping normalization.`);
-          } else {
-            console.log(`[Background] Live stream running. Dynamically normalizing uploaded file "${fileName}" to match targetConfig (${config.targetConfig.width}x${config.targetConfig.height}, ${config.targetConfig.fps}fps)`);
-            const tempPath = filePath + '.tmp.mp4';
-            await normalizeVideo(filePath, tempPath, config.targetConfig, ffmpegPath, config.bitrate, config.preset);
-            if (fs.existsSync(tempPath)) {
-              fs.unlinkSync(filePath);
-              fs.renameSync(tempPath, filePath);
-              console.log(`[Background] Successfully normalized uploaded file: ${fileName}`);
-            } else {
-              throw new Error('Normalization output file was not created');
+        // 2. Append to playlist immediately
+        if (!Array.isArray(config.playlist)) {
+          config.playlist = [];
+        }
+        if (!config.playlist.includes(fileName)) {
+          config.playlist.push(fileName);
+        }
+
+        // 3. Determine targetConfig from reference video if not set
+        let targetConfig = config.targetConfig;
+        if (!targetConfig && config.playlist.length > 0) {
+          const firstVideoName = config.playlist[0];
+          const firstVideoPath = path.join(uploadsDir, firstVideoName);
+          if (fs.existsSync(firstVideoPath)) {
+            try {
+              targetConfig = await getVideoConfig(firstVideoPath, ffmpegPath);
+              config.targetConfig = targetConfig;
+            } catch (err) {
+              console.error(`[Background] Failed to get targetConfig from reference:`, err);
             }
           }
         }
 
-        // 3. Update playlist configuration on success
-        if (!Array.isArray(config.playlist)) {
-          config.playlist = [];
-        }
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        console.log(`[Background] Appended "${fileName}" to playlist config`);
 
-        // Only append if it's not already tracked in the playlist array
-        if (!config.playlist.includes(fileName)) {
-          config.playlist.push(fileName);
-          fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-          console.log(`[Background] Successfully appended "${fileName}" to loop playlist config`);
+        // 4. Trigger background normalization if targetConfig is available
+        if (targetConfig) {
+          const isNorm = await isNormalized(filePath, targetConfig, ffmpegPath);
+          if (isNorm) {
+            console.log(`[Background] Uploaded file "${fileName}" is already normalized to match reference configuration. Skipping.`);
+          } else {
+            triggerNormalization(fileName, targetConfig, ffmpegPath, config.bitrate, config.preset);
+          }
         }
       }
     } catch (err) {
       console.error(`[Background] Failed to process uploaded file "${fileName}":`, err);
-      if (fs.existsSync(filePath)) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (unlinkErr) {
-          console.error(`[Background] Failed to clean up file "${fileName}":`, unlinkErr);
-        }
-      }
     }
   })();
 }
