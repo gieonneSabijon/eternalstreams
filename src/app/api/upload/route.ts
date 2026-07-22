@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
-import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization, getReferenceVideoName } from '@/lib/video';
+import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization, getReferenceVideoName, getFreeDiskSpace } from '@/lib/video';
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const configPath = path.join(process.cwd(), 'stream-config.json');
@@ -96,31 +96,46 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
   })();
 }
 
-// Memory-efficient sequential stream merge
-async function mergeChunks(chunkFiles: string[], finalFilePath: string): Promise<void> {
-  const writeStream = fs.createWriteStream(finalFilePath);
-  for (const chunkFile of chunkFiles) {
-    const readStream = fs.createReadStream(chunkFile);
-    readStream.pipe(writeStream, { end: false });
-    await new Promise<void>((resolve, reject) => {
-      readStream.on('end', resolve);
-      readStream.on('error', reject);
-    });
+// Startup cleanup check for orphaned files
+let hasCleanedUpOrphans = false;
+function cleanupOrphanedTempFiles() {
+  if (hasCleanedUpOrphans) return;
+  hasCleanedUpOrphans = true;
+  
+  try {
+    if (!fs.existsSync(uploadsDir)) return;
+    const files = fs.readdirSync(uploadsDir);
+    const now = Date.now();
+    const oneHour = 60 * 60 * 1000;
+    
+    for (const file of files) {
+      if (
+        (file.startsWith('temp_') && (file.endsWith('.part') || file.includes('_temp_') || file.includes('_chunk_'))) ||
+        (file.startsWith('temp_') && file.includes('_') && file.endsWith('.mp4'))
+      ) {
+        const filePath = path.join(uploadsDir, file);
+        const stats = fs.statSync(filePath);
+        if (now - stats.mtimeMs > oneHour) {
+          fs.unlinkSync(filePath);
+          console.log(`[Startup Cleanup] Deleted orphaned temp upload file: ${file}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Startup Cleanup] Failed to clean up orphaned temp files:', err);
   }
-  writeStream.end();
-  await new Promise<void>((resolve, reject) => {
-    writeStream.on('finish', () => resolve());
-    writeStream.on('error', (err) => reject(err));
-  });
 }
 
 export async function POST(request: Request) {
+  cleanupOrphanedTempFiles();
+
   try {
     const { searchParams } = new URL(request.url);
     const chunkIndexStr = searchParams.get('chunkIndex');
     const totalChunksStr = searchParams.get('totalChunks');
     const fileName = searchParams.get('fileName');
     const uploadId = searchParams.get('uploadId');
+    const totalSizeStr = searchParams.get('totalSize');
 
     if (!fs.existsSync(uploadsDir)) {
       fs.mkdirSync(uploadsDir, { recursive: true });
@@ -133,6 +148,17 @@ export async function POST(request: Request) {
       if (!file) {
         return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
       }
+
+      // Disk Space Safeguard check for legacy upload
+      const freeSpace = getFreeDiskSpace(uploadsDir);
+      if (freeSpace < file.size) {
+        const errMsg = `Upload rejected: Insufficient disk space on VPS. File size: ${file.size} bytes, free space: ${freeSpace} bytes.`;
+        console.error(`[Upload] ${errMsg}`);
+        const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
+        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload ERROR] Legacy upload rejected: Insufficient disk space. Required: ${file.size} bytes, Available: ${freeSpace} bytes.\n`);
+        return NextResponse.json({ error: errMsg }, { status: 507 });
+      }
+
       const buffer = Buffer.from(await file.arrayBuffer());
       const legacyFileName = file.name;
       const filePath = path.join(uploadsDir, legacyFileName);
@@ -149,60 +175,69 @@ export async function POST(request: Request) {
 
     const chunkIndex = parseInt(chunkIndexStr, 10);
     const totalChunks = parseInt(totalChunksStr, 10);
-    const tempChunkFilePath = path.join(uploadsDir, `temp_${uploadId}_${chunkIndex}_${fileName}`);
+    const totalSize = totalSizeStr ? parseInt(totalSizeStr, 10) : 0;
+    const tempPartFilePath = path.join(uploadsDir, `temp_${uploadId}_${fileName}.part`);
 
-    // Stream raw request body chunk directly to the temporary chunk file on disk
-    const writeStream = fs.createWriteStream(tempChunkFilePath, { flags: 'w' });
-    const nodeStream = Readable.fromWeb(request.body as any);
-    nodeStream.pipe(writeStream);
-
-    await new Promise<void>((resolve, reject) => {
-      writeStream.on('finish', () => resolve());
-      writeStream.on('error', (err) => reject(err));
-      nodeStream.on('error', (err) => reject(err));
-    });
-
-    // Check if all chunks have been uploaded
-    const chunkFiles = Array.from({ length: totalChunks }, (_, i) => 
-      path.join(uploadsDir, `temp_${uploadId}_${i}_${fileName}`)
-    );
-
-    const allPresent = chunkFiles.every(f => fs.existsSync(f));
-
-    if (allPresent) {
-      const lockKey = `${uploadId}_${fileName}`;
-      if (!(global as any).activeMerges) {
-        (global as any).activeMerges = new Set<string>();
-      }
-
-      if (!(global as any).activeMerges.has(lockKey)) {
-        (global as any).activeMerges.add(lockKey);
-        try {
-          const finalFilePath = path.join(uploadsDir, fileName);
-          if (fs.existsSync(finalFilePath)) {
-            fs.unlinkSync(finalFilePath);
-          }
-
-          await mergeChunks(chunkFiles, finalFilePath);
-
-          // Clean up chunk files
-          for (const chunkFile of chunkFiles) {
-            try {
-              fs.unlinkSync(chunkFile);
-            } catch (unlinkErr) {
-              console.error(`Failed to delete temp chunk file ${chunkFile}:`, unlinkErr);
-            }
-          }
-
-          // Trigger background validation, normalization, and config update
-          triggerBackgroundNormalizationAndConfigUpdate(fileName, finalFilePath);
-        } finally {
-          (global as any).activeMerges.delete(lockKey);
-        }
+    // 3. Disk Space Safeguard check (on first chunk)
+    if (chunkIndex === 0 && totalSize > 0) {
+      const freeSpace = getFreeDiskSpace(uploadsDir);
+      if (freeSpace < totalSize) {
+        const errMsg = `Upload rejected: Insufficient disk space on VPS. File size: ${totalSize} bytes, free space: ${freeSpace} bytes.`;
+        console.error(`[Upload] ${errMsg}`);
+        const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
+        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload ERROR] Upload of "${fileName}" rejected: Insufficient disk space. Required: ${totalSize} bytes, Available: ${freeSpace} bytes.\n`);
+        return NextResponse.json({ error: errMsg }, { status: 507 });
       }
     }
 
-    return NextResponse.json({ success: true, chunkIndex, totalChunks });
+    // 4. Abort cleanup hook
+    const abortHandler = () => {
+      console.log(`[Upload] Upload session ${uploadId} aborted by client. Cleaning up...`);
+      try {
+        if (fs.existsSync(tempPartFilePath)) {
+          fs.unlinkSync(tempPartFilePath);
+          console.log(`[Upload Cleanup] Deleted residual part file: ${tempPartFilePath}`);
+        }
+      } catch (err: any) {
+        console.error(`[Upload Cleanup] Failed to clean up part file on abort:`, err.message);
+      }
+    };
+    request.signal.addEventListener('abort', abortHandler);
+
+    try {
+      const chunkBuffer = Buffer.from(await request.arrayBuffer());
+
+      if (chunkIndex === 0) {
+        fs.writeFileSync(tempPartFilePath, chunkBuffer);
+      } else {
+        fs.appendFileSync(tempPartFilePath, chunkBuffer);
+      }
+
+      // Check if this is the final chunk
+      if (chunkIndex === totalChunks - 1) {
+        const finalFilePath = path.join(uploadsDir, fileName);
+        if (fs.existsSync(finalFilePath)) {
+          fs.unlinkSync(finalFilePath);
+        }
+        fs.renameSync(tempPartFilePath, finalFilePath);
+        console.log(`[Upload] Completed upload of "${fileName}". Temporary part file renamed.`);
+
+        triggerBackgroundNormalizationAndConfigUpdate(fileName, finalFilePath);
+      }
+
+      return NextResponse.json({ success: true, chunkIndex, totalChunks });
+    } catch (writeError: any) {
+      console.error(`[Upload] Error writing chunk ${chunkIndex} for ${fileName}:`, writeError);
+      try {
+        if (fs.existsSync(tempPartFilePath)) {
+          fs.unlinkSync(tempPartFilePath);
+        }
+      } catch {}
+      throw writeError;
+    } finally {
+      request.signal.removeEventListener('abort', abortHandler);
+    }
+
   } catch (error: any) {
     console.error('Upload error details:', error);
     return NextResponse.json({ error: error.message || 'Upload failed' }, { status: 500 });

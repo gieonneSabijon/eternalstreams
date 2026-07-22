@@ -313,7 +313,7 @@ export default function EternalStreamDashboard() {
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
 
-        const url = `/api/upload?uploadId=${uploadId}&fileName=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}`;
+        const url = `/api/upload?uploadId=${uploadId}&fileName=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}&totalSize=${file.size}`;
 
         const res = await fetch(url, {
           method: "POST",

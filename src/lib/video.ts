@@ -186,6 +186,43 @@ export function getVideoConfig(filePath: string, ffmpegPath: string): Promise<Vi
   });
 }
 
+export function getFreeDiskSpace(dirPath: string): number {
+  try {
+    if (process.platform === 'win32') {
+      const drive = path.resolve(dirPath).substring(0, 2);
+      // Try wmic first
+      try {
+        const output = execSync(`wmic logicaldisk where DeviceID="${drive}" get FreeSpace`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+        const lines = output.trim().split('\n');
+        if (lines.length > 1) {
+          const freeBytes = parseInt(lines[1].trim(), 10);
+          if (!isNaN(freeBytes)) return freeBytes;
+        }
+      } catch (e) {
+        // ignore and fall back to PowerShell
+      }
+      
+      // Fallback: PowerShell (standard on modern Windows)
+      try {
+        const psOutput = execSync(`powershell -NoProfile -Command "(Get-Volume -DriveLetter ${drive[0]}).SizeRemaining"`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+        const freeBytesPs = parseInt(psOutput.trim(), 10);
+        if (!isNaN(freeBytesPs)) return freeBytesPs;
+      } catch (e) {
+        // ignore
+      }
+    } else {
+      // Linux/macOS
+      const output = execSync(`df -B1 "${dirPath}" | tail -n 1 | awk '{print $4}'`, { encoding: 'utf8' });
+      const freeBytes = parseInt(output.trim(), 10);
+      if (!isNaN(freeBytes)) return freeBytes;
+    }
+  } catch (err) {
+    console.error('Error checking disk space:', err);
+  }
+  // Fallback to 10 GB
+  return 10 * 1024 * 1024 * 1024;
+}
+
 export async function getReferenceVideoName(uploadsDir: string, playlist?: string[]): Promise<string | null> {
   if (playlist && playlist.length > 0) {
     return playlist[0];
