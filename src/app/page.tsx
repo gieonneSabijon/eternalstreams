@@ -303,33 +303,81 @@ export default function EternalStreamDashboard() {
     setIsUploading(true);
     setUploadProgress(0);
 
-    const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks
+    const CHUNK_SIZE = 20 * 1024 * 1024; // 20MB chunks
+    const MAX_CONCURRENT_UPLOADS = 3;
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
     const uploadId = Date.now().toString() + "_" + Math.random().toString(36).substring(2, 8);
 
-    try {
-      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+    const pendingChunks = Array.from({ length: totalChunks }, (_, i) => i);
+    const completedChunks = new Set<number>();
+    let hasFailed = false;
+    let uploadError: any = null;
+
+    const uploadWorker = async () => {
+      while (pendingChunks.length > 0 && !hasFailed) {
+        const chunkIndex = pendingChunks.shift();
+        if (chunkIndex === undefined) break;
+
         const start = chunkIndex * CHUNK_SIZE;
         const end = Math.min(start + CHUNK_SIZE, file.size);
         const chunk = file.slice(start, end);
 
         const url = `/api/upload?uploadId=${uploadId}&fileName=${encodeURIComponent(file.name)}&chunkIndex=${chunkIndex}&totalChunks=${totalChunks}&totalSize=${file.size}`;
 
-        const res = await fetch(url, {
-          method: "POST",
-          body: chunk,
-          headers: {
-            "Content-Type": "application/octet-stream"
-          }
-        });
+        // Retry logic for this specific chunk
+        let attempts = 3;
+        let success = false;
+        let lastErr = null;
 
-        if (!res.ok) {
-          const errData = await res.json();
-          throw new Error(errData.error || `Chunk ${chunkIndex + 1}/${totalChunks} upload failed.`);
+        while (attempts > 0 && !success && !hasFailed) {
+          try {
+            const res = await fetch(url, {
+              method: "POST",
+              body: chunk,
+              headers: {
+                "Content-Type": "application/octet-stream"
+              }
+            });
+
+            if (!res.ok) {
+              const errData = await res.json();
+              throw new Error(errData.error || `Chunk ${chunkIndex + 1}/${totalChunks} failed.`);
+            }
+
+            success = true;
+          } catch (err: any) {
+            attempts--;
+            lastErr = err;
+            if (attempts > 0 && !hasFailed) {
+              console.warn(`Retrying chunk ${chunkIndex + 1}/${totalChunks} (${attempts} attempts left). Error:`, err.message);
+              await new Promise(r => setTimeout(r, 1000)); // wait 1s before retry
+            }
+          }
         }
 
-        const progressPercent = Math.round(((chunkIndex + 1) / totalChunks) * 100);
+        if (!success) {
+          hasFailed = true;
+          uploadError = lastErr || new Error(`Failed to upload chunk ${chunkIndex + 1}/${totalChunks} after 3 attempts.`);
+          break;
+        }
+
+        completedChunks.add(chunkIndex);
+        const progressPercent = Math.round((completedChunks.size / totalChunks) * 100);
         setUploadProgress(progressPercent);
+      }
+    };
+
+    try {
+      const workers = [];
+      const workerCount = Math.min(MAX_CONCURRENT_UPLOADS, totalChunks);
+      for (let i = 0; i < workerCount; i++) {
+        workers.push(uploadWorker());
+      }
+
+      await Promise.all(workers);
+
+      if (hasFailed) {
+        throw uploadError || new Error("Upload failed.");
       }
 
       showToast(`"${file.name}" uploaded successfully!`, "success");
