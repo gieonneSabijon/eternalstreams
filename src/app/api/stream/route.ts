@@ -66,37 +66,34 @@ export function writeConfig(config: any) {
 
 export async function writePlaylistFile(playlist: string[], uploadsDir: string, ffmpegPath: string): Promise<string> {
   const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
-  const playlistLines = ['ffconcat version 1.0'];
+  let playlistContent = "ffconcat version 1.0\n";
+  
+  // 1. Declare baseline global stream layout ONCE at the top
+  playlistContent += "stream\nexact_stream_id 0x1\nstream\nexact_stream_id 0x2\n\n";
 
   for (const file of playlist) {
     const videoPath = path.join(uploadsDir, file);
     const absoluteVideoPath = videoPath.replace(/\\/g, '/');
-    playlistLines.push(`file '${absoluteVideoPath}'`);
+    
+    playlistContent += `file '${absoluteVideoPath}'\n`;
 
     try {
       const vidConfig = await getVideoConfig(videoPath, ffmpegPath);
-      // Map Video stream to output index 0
-      if (vidConfig.videoStreamIndex !== null && vidConfig.videoStreamIndex !== undefined) {
-        const videoIdHex = '0x' + (vidConfig.videoStreamIndex + 1).toString(16);
-        playlistLines.push('stream');
-        playlistLines.push(`exact_stream_id ${videoIdHex}`);
-      }
-      // Map Audio stream to output index 1
-      if (vidConfig.audioStreamIndex !== null && vidConfig.audioStreamIndex !== undefined) {
-        const audioIdHex = '0x' + (vidConfig.audioStreamIndex + 1).toString(16);
-        playlistLines.push('stream');
-        playlistLines.push(`exact_stream_id ${audioIdHex}`);
+      // 2. Add file-level overrides ONLY IF the video stream is NOT at index 0 (swapped track order)
+      if (vidConfig.videoStreamIndex !== 0) {
+        const vTrack = `0x${(vidConfig.videoStreamIndex + 1).toString(16)}`;
+        const aTrack = `0x${(vidConfig.audioStreamIndex + 1).toString(16)}`;
+        
+        playlistContent += `stream\nexact_stream_id ${vTrack}\n`;
+        playlistContent += `stream\nexact_stream_id ${aTrack}\n`;
       }
     } catch (e) {
       console.error(`Failed to get video config for exact stream mapping of ${file}:`, e);
-      playlistLines.push('stream');
-      playlistLines.push('exact_stream_id 0x1');
-      playlistLines.push('stream');
-      playlistLines.push('exact_stream_id 0x2');
     }
+    
+    playlistContent += "\n";
   }
 
-  const playlistContent = playlistLines.join('\n');
   fs.writeFileSync(playlistFilePath, playlistContent);
   return playlistContent;
 }
