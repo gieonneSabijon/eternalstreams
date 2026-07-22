@@ -204,7 +204,7 @@ export async function getReferenceVideoName(uploadsDir: string, playlist?: strin
 export async function isNormalized(filePath: string, target: VideoConfig, ffmpegPath: string): Promise<boolean> {
   try {
     const current = await getVideoConfig(filePath, ffmpegPath);
-    return current.videoStreamIndex === 0 && current.audioStreamIndex === 1;
+    return current.videoStreamIndex === 0 && current.audioStreamIndex === 1 && current.tbn === target.tbn;
   } catch (err) {
     console.error(`Error checking normalization for ${filePath}:`, err);
     return false;
@@ -227,6 +227,7 @@ export function normalizeVideo(
       '-map', '0:v:0',
       '-map', '0:a:0?',
       '-c', 'copy',
+      '-video_track_timescale', target.tbn.toString(),
       '-movflags', '+faststart',
       tempPath
     ];
@@ -294,6 +295,7 @@ export function triggerNormalization(
         '-map', '0:v:0',
         '-map', '0:a:0?',
         '-c', 'copy',
+        '-video_track_timescale', targetConfig.tbn.toString(),
         '-movflags', '+faststart',
         tempPath
       ];

@@ -108,12 +108,18 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
       
       const current = await getVideoConfig(filePath, ffmpegPath);
       const fpsMatch = Math.abs(current.fps - targetConfig.fps) < 0.5;
+      const isCompatible = 
+        current.width === targetConfig.width &&
+        current.height === targetConfig.height &&
+        fpsMatch &&
+        current.sampleRate === targetConfig.sampleRate &&
+        current.channels === targetConfig.channels;
 
-      if (current.width !== targetConfig.width || current.height !== targetConfig.height || !fpsMatch) {
-        console.error(`[Sync/Check] Removing video "${file}" due to resolution/FPS mismatch.`);
+      if (!isCompatible) {
+        console.error(`[Sync/Check] Removing video "${file}" due to parameter mismatch.`);
         
         const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Playlist ERROR] Video "${file}" removed from queue. Resolution/FPS (${current.width}x${current.height}, ${current.fps} fps) does not match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps).\n`);
+        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Playlist ERROR] Video "${file}" removed from queue. Resolution/FPS (${current.width}x${current.height}, ${current.fps} fps) or Audio (${current.sampleRate}Hz, ${current.channels}ch) does not match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps, ${targetConfig.sampleRate}Hz, ${targetConfig.channels}ch).\n`);
         
         config.playlist = config.playlist.filter((name: string) => name !== file);
         playlistModified = true;

@@ -46,14 +46,21 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
           }
         }
 
-        // Verify that the resolution and FPS match the reference config
+        // Verify that the resolution, FPS, sampleRate, and channels match the reference config
         if (targetConfig) {
           const fpsMatch = Math.abs(videoConfig.fps - targetConfig.fps) < 0.5;
-          if (videoConfig.width !== targetConfig.width || videoConfig.height !== targetConfig.height || !fpsMatch) {
-            console.error(`[Background] Validation failed for "${fileName}": Resolution/FPS mismatch.`);
+          const isCompatible = 
+            videoConfig.width === targetConfig.width &&
+            videoConfig.height === targetConfig.height &&
+            fpsMatch &&
+            videoConfig.sampleRate === targetConfig.sampleRate &&
+            videoConfig.channels === targetConfig.channels;
+
+          if (!isCompatible) {
+            console.error(`[Background] Validation failed for "${fileName}": Parameter mismatch.`);
             
             const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-            fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload Validation ERROR] Video "${fileName}" rejected. Resolution/FPS (${videoConfig.width}x${videoConfig.height}, ${videoConfig.fps} fps) must match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps).\n`);
+            fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload Validation ERROR] Video "${fileName}" rejected. Resolution/FPS (${videoConfig.width}x${videoConfig.height}, ${videoConfig.fps} fps) or Audio (${videoConfig.sampleRate}Hz, ${videoConfig.channels}ch) must match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps, ${targetConfig.sampleRate}Hz, ${targetConfig.channels}ch).\n`);
             
             if (fs.existsSync(filePath)) {
               fs.unlinkSync(filePath);
