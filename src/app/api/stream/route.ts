@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization, getReferenceVideoName } from '@/lib/video';
+import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization, getReferenceVideoName, safeAppendToLog } from '@/lib/video';
+
 
 const configPath = path.join(process.cwd(), 'stream-config.json');
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -62,9 +63,6 @@ export function writeConfig(config: any) {
 }
 
 export async function ensurePlaylistNormalized(config: any, uploadsDir: string, ffmpegPath: string): Promise<string[]> {
-  const normalizingList: string[] = [];
-  const activeNormalizations = (global as any).activeNormalizations || new Set<string>();
-
   let targetConfig = null;
   let referenceVideoName = await getReferenceVideoName(uploadsDir, config.playlist);
   let referenceVideoIndex = -1;
@@ -85,20 +83,6 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
     return [];
   }
 
-  if (targetConfig.videoStreamIndex !== 0 || targetConfig.audioStreamIndex !== 1) {
-    if (activeNormalizations.has(referenceVideoName)) {
-      normalizingList.push(referenceVideoName);
-    } else {
-      const standardTargetConfig = {
-        ...targetConfig,
-        videoStreamIndex: 0,
-        audioStreamIndex: 1
-      };
-      triggerNormalization(referenceVideoName, standardTargetConfig, ffmpegPath, config.bitrate, config.preset);
-      normalizingList.push(referenceVideoName);
-    }
-  }
-
   let playlistModified = false;
   for (let i = referenceVideoIndex + 1; i < config.playlist.length; i++) {
     const file = config.playlist[i];
@@ -108,35 +92,29 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
       
       const current = await getVideoConfig(filePath, ffmpegPath);
       const fpsMatch = Math.abs(current.fps - targetConfig.fps) < 0.5;
+      const isVideoH264 = current.codecVideo.includes('h264') || current.codecVideo.includes('avc');
       const isCompatible = 
         current.width === targetConfig.width &&
         current.height === targetConfig.height &&
         fpsMatch &&
-        current.sampleRate === targetConfig.sampleRate &&
-        current.channels === targetConfig.channels;
+        isVideoH264;
 
       if (!isCompatible) {
-        console.error(`[Sync/Check] Removing video "${file}" due to parameter mismatch.`);
+        console.error(`[Sync/Check] Removing video "${file}" due to parameter/codec mismatch.`);
         
         const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Playlist ERROR] Video "${file}" removed from queue. Resolution/FPS (${current.width}x${current.height}, ${current.fps} fps) or Audio (${current.sampleRate}Hz, ${current.channels}ch) does not match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps, ${targetConfig.sampleRate}Hz, ${targetConfig.channels}ch).\n`);
+        try {
+          fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Playlist ERROR] Video "${file}" removed from queue. Resolution/FPS (${current.width}x${current.height}, ${current.fps} fps, codec: ${current.codecVideo}) or codec does not match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps, codec: ${targetConfig.codecVideo}).\n`);
+        } catch (logErr) {
+          // ignore log write errors
+        }
         
         config.playlist = config.playlist.filter((name: string) => name !== file);
         playlistModified = true;
         continue;
       }
-      
-      const isNorm = await isNormalized(filePath, targetConfig, ffmpegPath);
-      if (!isNorm) {
-        if (activeNormalizations.has(file)) {
-          normalizingList.push(file);
-        } else {
-          triggerNormalization(file, targetConfig, ffmpegPath, config.bitrate, config.preset);
-          normalizingList.push(file);
-        }
-      }
     } catch (err) {
-      console.error(`Error checking normalized status for ${file}:`, err);
+      console.error(`Error checking compatibility for ${file}:`, err);
     }
   }
 
@@ -144,7 +122,7 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
     writeConfig(config);
   }
 
-  return normalizingList;
+  return [];
 }
 
 export async function startBroadcastHelper(streamKey: string, config: any) {

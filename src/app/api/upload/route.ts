@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
-import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization, getReferenceVideoName, getFreeDiskSpace } from '@/lib/video';
+import { getFfmpegCommand, normalizeVideo, isNormalized, getVideoConfig, triggerNormalization, getReferenceVideoName, getFreeDiskSpace, safeAppendToLog } from '@/lib/video';
+
 
 const uploadsDir = path.join(process.cwd(), 'uploads');
 const configPath = path.join(process.cwd(), 'stream-config.json');
@@ -46,21 +47,20 @@ function triggerBackgroundNormalizationAndConfigUpdate(fileName: string, filePat
           }
         }
 
-        // Verify that the resolution, FPS, sampleRate, and channels match the reference config
+        // Verify that the resolution, FPS, and video codec match the reference config
         if (targetConfig) {
           const fpsMatch = Math.abs(videoConfig.fps - targetConfig.fps) < 0.5;
+          const isVideoH264 = videoConfig.codecVideo.includes('h264') || videoConfig.codecVideo.includes('avc');
           const isCompatible = 
             videoConfig.width === targetConfig.width &&
             videoConfig.height === targetConfig.height &&
             fpsMatch &&
-            videoConfig.sampleRate === targetConfig.sampleRate &&
-            videoConfig.channels === targetConfig.channels;
+            isVideoH264;
 
           if (!isCompatible) {
             console.error(`[Background] Validation failed for "${fileName}": Parameter mismatch.`);
             
-            const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-            fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload Validation ERROR] Video "${fileName}" rejected. Resolution/FPS (${videoConfig.width}x${videoConfig.height}, ${videoConfig.fps} fps) or Audio (${videoConfig.sampleRate}Hz, ${videoConfig.channels}ch) must match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps, ${targetConfig.sampleRate}Hz, ${targetConfig.channels}ch).\n`);
+            safeAppendToLog(`[${new Date().toISOString()}] [Upload Validation ERROR] Video "${fileName}" rejected. Resolution/FPS (${videoConfig.width}x${videoConfig.height}, ${videoConfig.fps} fps, codec: ${videoConfig.codecVideo}) must match reference (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps} fps, codec: ${targetConfig.codecVideo}).\n`);
             
             if (fs.existsSync(filePath)) {
               fs.unlinkSync(filePath);
@@ -180,8 +180,7 @@ export async function POST(request: Request) {
       if (freeSpace < requiredSpace) {
         const errMsg = `Upload rejected: Insufficient disk space on VPS. Upload requires ${requiredSpace} bytes, free space: ${freeSpace} bytes.`;
         console.error(`[Upload] ${errMsg}`);
-        const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload ERROR] Legacy upload rejected: Insufficient disk space. Required: ${requiredSpace} bytes, Available: ${freeSpace} bytes.\n`);
+        safeAppendToLog(`[${new Date().toISOString()}] [Upload ERROR] Legacy upload rejected: Insufficient disk space. Required: ${requiredSpace} bytes, Available: ${freeSpace} bytes.\n`);
         return NextResponse.json({ error: errMsg }, { status: 507 });
       }
 
@@ -211,8 +210,7 @@ export async function POST(request: Request) {
       if (freeSpace < requiredSpace) {
         const errMsg = `Upload rejected: Insufficient disk space on VPS. Upload requires ${requiredSpace} bytes, free space: ${freeSpace} bytes.`;
         console.error(`[Upload] ${errMsg}`);
-        const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-        fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Upload ERROR] Upload of "${fileName}" rejected: Insufficient disk space. Required: ${requiredSpace} bytes, Available: ${freeSpace} bytes.\n`);
+        safeAppendToLog(`[${new Date().toISOString()}] [Upload ERROR] Upload of "${fileName}" rejected: Insufficient disk space. Required: ${requiredSpace} bytes, Available: ${freeSpace} bytes.\n`);
         return NextResponse.json({ error: errMsg }, { status: 507 });
       }
     }

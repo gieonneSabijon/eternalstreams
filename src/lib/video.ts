@@ -7,6 +7,15 @@ import ffmpegPathRaw from 'ffmpeg-static';
 
 const execPromise = util.promisify(exec);
 
+export function safeAppendToLog(message: string) {
+  const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
+  try {
+    fs.appendFileSync(logFilePath, message);
+  } catch (err: any) {
+    console.error(`[safeAppendToLog Fail] ${err.message}. Message was: ${message.trim()}`);
+  }
+}
+
 export interface VideoConfig {
   width: number;
   height: number;
@@ -254,8 +263,7 @@ export async function isNormalized(filePath: string, target: VideoConfig, ffmpeg
   try {
     const current = await getVideoConfig(filePath, ffmpegPath);
     const isVideoH264 = current.codecVideo.includes('h264') || current.codecVideo.includes('avc');
-    const isAudioAac = !current.codecAudio || current.codecAudio.includes('aac');
-    return isVideoH264 && isAudioAac;
+    return isVideoH264;
   } catch (err) {
     console.error(`Error checking normalization for ${filePath}:`, err);
     return false;
@@ -270,53 +278,8 @@ export function normalizeVideo(
   bitrate?: number,
   preset?: string
 ): Promise<void> {
-  const fileName = path.basename(filePath);
-  
-  if (fs.existsSync(filePath)) {
-    const stats = fs.statSync(filePath);
-    const freeSpace = getFreeDiskSpace(path.dirname(filePath));
-    const safetyMargin = 50 * 1024 * 1024; // 50MB
-    if (freeSpace < stats.size + safetyMargin) {
-      const errMsg = `Normalization aborted for "${fileName}": Insufficient VPS storage. Required: ${stats.size} bytes, Available: ${freeSpace} bytes.`;
-      console.error(`[Normalization Error] ${errMsg}`);
-      const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-      fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Normalization ERROR] Aborted normalization for "${fileName}": Insufficient disk space. Required: ${stats.size} bytes, Available: ${freeSpace} bytes.\n`);
-      return Promise.reject(new Error(errMsg));
-    }
-  }
-
-  return new Promise((resolve, reject) => {
-    const args = [
-      '-y',
-      '-nostdin',
-      '-i', filePath,
-      '-map', '0:v:0',
-      '-map', '0:a:0?',
-      '-c', 'copy',
-      '-video_track_timescale', target.tbn.toString(),
-      '-movflags', '+faststart',
-      tempPath
-    ];
-
-    const child = spawn(ffmpegPath, args);
-    let stderr = '';
-
-    child.stderr?.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new Error(`ffmpeg exited with code ${code}. Stderr: ${stderr}`));
-      }
-    });
-
-    child.on('error', (err) => {
-      reject(err);
-    });
-  });
+  console.log(`[Normalization] Bypassed normalizeVideo for "${path.basename(filePath)}" as on-the-fly audio resampling is active.`);
+  return Promise.resolve();
 }
 
 export function triggerNormalization(
@@ -326,97 +289,7 @@ export function triggerNormalization(
   bitrate?: number,
   preset?: string
 ): void {
-  const uploadsDir = path.join(process.cwd(), 'uploads');
-  const filePath = path.join(uploadsDir, fileName);
-
-  if (fs.existsSync(filePath)) {
-    const stats = fs.statSync(filePath);
-    const freeSpace = getFreeDiskSpace(uploadsDir);
-    const safetyMargin = 50 * 1024 * 1024; // 50MB
-    if (freeSpace < stats.size + safetyMargin) {
-      console.error(`[Background] Normalization aborted for "${fileName}": Insufficient disk space.`);
-      const logFilePath = path.join(process.cwd(), 'ffmpeg_log.txt');
-      fs.appendFileSync(logFilePath, `[${new Date().toISOString()}] [Normalization ERROR] Aborted background normalization for "${fileName}": Insufficient disk space. Required: ${stats.size} bytes, Available: ${freeSpace} bytes.\n`);
-      return;
-    }
-  }
-
-  if (!(global as any).activeNormalizations) {
-    (global as any).activeNormalizations = new Set<string>();
-  }
-  if (!(global as any).normalizationProcesses) {
-    (global as any).normalizationProcesses = new Map<string, any>();
-  }
-
-  const activeNormalizations = (global as any).activeNormalizations as Set<string>;
-  const normalizationProcesses = (global as any).normalizationProcesses as Map<string, any>;
-
-  if (activeNormalizations.has(fileName)) {
-    console.log(`[Background] Normalization already active for "${fileName}". Skipping duplicate trigger.`);
-    return;
-  }
-
-  activeNormalizations.add(fileName);
-  console.log(`[Background] Triggered normalization for "${fileName}"`);
-
-  (async () => {
-    const tempPath = filePath + '.tmp.mp4';
-    try {
-      if (fs.existsSync(tempPath)) {
-        try { fs.unlinkSync(tempPath); } catch {}
-      }
-
-      const args = [
-        '-y',
-        '-nostdin',
-        '-i', filePath,
-        '-map', '0:v:0',
-        '-map', '0:a:0?',
-        '-c', 'copy',
-        '-video_track_timescale', targetConfig.tbn.toString(),
-        '-movflags', '+faststart',
-        tempPath
-      ];
-
-      const child = spawn(ffmpegPath, args);
-      normalizationProcesses.set(fileName, child);
-
-      let stderr = '';
-      child.stderr?.on('data', (data) => {
-        stderr += data.toString();
-      });
-
-      await new Promise<void>((resolve, reject) => {
-        child.on('close', (code) => {
-          normalizationProcesses.delete(fileName);
-          if (code === 0) {
-            resolve();
-          } else {
-            reject(new Error(`ffmpeg exited with code ${code}. Stderr: ${stderr}`));
-          }
-        });
-        child.on('error', (err) => {
-          normalizationProcesses.delete(fileName);
-          reject(err);
-        });
-      });
-
-      if (fs.existsSync(tempPath)) {
-        fs.unlinkSync(filePath);
-        fs.renameSync(tempPath, filePath);
-        console.log(`[Background] Successfully normalized: ${fileName}`);
-      } else {
-        throw new Error('Normalization output file was not created');
-      }
-    } catch (err: any) {
-      console.error(`[Background] Normalization failed for "${fileName}":`, err.message);
-      if (fs.existsSync(tempPath)) {
-        try { fs.unlinkSync(tempPath); } catch {}
-      }
-    } finally {
-      activeNormalizations.delete(fileName);
-    }
-  })();
+  console.log(`[Background] Bypassed background normalization check for "${fileName}".`);
 }
 
 export function killLingeringFfmpegProcesses() {
