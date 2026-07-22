@@ -359,3 +359,84 @@ if (typeof window === 'undefined') {
     });
   }
 }
+
+export function ensureStandardTrackOrder(filePath: string, ffmpegPath: string): Promise<void> {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const config = await getVideoConfig(filePath, ffmpegPath);
+      if (config.videoStreamIndex === 0) {
+        // Track order is already correct (video at 0)
+        return resolve();
+      }
+
+      // Safeguard #3: Check file lock state / live stream status
+      const configPath = path.join(process.cwd(), 'stream-config.json');
+      if (fs.existsSync(configPath)) {
+        try {
+          const configJson = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+          if (configJson.status === 'live' && configJson.playlist.includes(path.basename(filePath))) {
+            console.warn(`[Track Swap] Skipping swap for "${path.basename(filePath)}" because stream is live and file is in active playlist.`);
+            return resolve();
+          }
+        } catch (e) {
+          // ignore read/parse errors
+        }
+      }
+      
+      console.log(`[Track Swap] Swapping tracks in-place for "${path.basename(filePath)}" to enforce video at index 0.`);
+      const tempPath = filePath + '.swap.mp4';
+      if (fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch {}
+      }
+
+      // Safeguard #2: Handle Optional Audio using -map 0:a?
+      const args = [
+        '-y',
+        '-nostdin',
+        '-i', filePath,
+        '-map', '0:v:0',
+        '-map', '0:a?',
+        '-c', 'copy',
+        tempPath
+      ];
+
+      const child = spawn(ffmpegPath, args);
+      let stderr = '';
+      child.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      child.on('close', async (code) => {
+        if (code === 0) {
+          // Safeguard #1: Atomic rename with copyFile + unlink fallback
+          try {
+            await fs.promises.rename(tempPath, filePath);
+            resolve();
+          } catch (renameErr: any) {
+            try {
+              await fs.promises.copyFile(tempPath, filePath);
+              await fs.promises.unlink(tempPath);
+              resolve();
+            } catch (fallbackErr: any) {
+              reject(new Error(`Failed to replace file during swap: ${renameErr.message} (Fallback error: ${fallbackErr.message})`));
+            }
+          }
+        } else {
+          if (fs.existsSync(tempPath)) {
+            try { fs.unlinkSync(tempPath); } catch {}
+          }
+          reject(new Error(`ffmpeg swap exited with code ${code}. Stderr: ${stderr}`));
+        }
+      });
+
+      child.on('error', (err) => {
+        if (fs.existsSync(tempPath)) {
+          try { fs.unlinkSync(tempPath); } catch {}
+        }
+        reject(err);
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}

@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
-import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization, getReferenceVideoName, safeAppendToLog } from '@/lib/video';
+import { getFfmpegCommand, getFfmpegDiagnostics, getVideoConfig, isNormalized, normalizeVideo, killLingeringFfmpegProcesses, triggerNormalization, getReferenceVideoName, safeAppendToLog, ensureStandardTrackOrder } from '@/lib/video';
+
 
 
 const configPath = path.join(process.cwd(), 'stream-config.json');
@@ -71,6 +72,7 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
     const videoPath = path.join(uploadsDir, referenceVideoName);
     try {
       if (fs.existsSync(videoPath)) {
+        await ensureStandardTrackOrder(videoPath, ffmpegPath);
         targetConfig = await getVideoConfig(videoPath, ffmpegPath);
         referenceVideoIndex = config.playlist.indexOf(referenceVideoName);
       }
@@ -89,6 +91,8 @@ export async function ensurePlaylistNormalized(config: any, uploadsDir: string, 
     const filePath = path.join(uploadsDir, file);
     try {
       if (!fs.existsSync(filePath)) continue;
+
+      await ensureStandardTrackOrder(filePath, ffmpegPath);
 
       const current = await getVideoConfig(filePath, ffmpegPath);
       const fpsMatch = Math.abs(current.fps - targetConfig.fps) < 0.5;
@@ -160,61 +164,8 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     throw new Error("No valid videos in the playlist to start the broadcast.");
   }
 
-  // Ensure the reference video itself is in standard track order (video at 0, audio at 1)
-  if (targetConfig.videoStreamIndex !== 0 || targetConfig.audioStreamIndex !== 1) {
-    console.log(`Reference video "${config.playlist[0]}" has non-standard track order. Normalizing to standard order...`);
-    const referenceVideoPath = path.join(uploadsDir, config.playlist[0]);
-    const tempPath = referenceVideoPath + '.tmp.mp4';
-    const standardTargetConfig = {
-      ...targetConfig,
-      videoStreamIndex: 0,
-      audioStreamIndex: 1
-    };
-    await normalizeVideo(referenceVideoPath, tempPath, standardTargetConfig, ffmpegPath, config.bitrate, config.preset);
-    if (fs.existsSync(tempPath)) {
-      fs.unlinkSync(referenceVideoPath);
-      fs.renameSync(tempPath, referenceVideoPath);
-      console.log(`Successfully normalized reference video to standard track order.`);
-      targetConfig = await getVideoConfig(referenceVideoPath, ffmpegPath);
-    }
-  }
-
   config.targetConfig = targetConfig;
   writeConfig(config);
-
-  // Check and normalize other playlist files to match targetConfig
-  const updatedPlaylist = [config.playlist[0]];
-  for (let i = 1; i < config.playlist.length; i++) {
-    const file = config.playlist[i];
-    const filePath = path.join(uploadsDir, file);
-    try {
-      if (!fs.existsSync(filePath)) {
-        throw new Error('File does not exist on disk');
-      }
-      const isNorm = await isNormalized(filePath, targetConfig, ffmpegPath);
-      if (!isNorm) {
-        console.log(`Normalizing playlist video "${file}" to match reference "${config.playlist[0]}" (${targetConfig.width}x${targetConfig.height}, ${targetConfig.fps}fps)`);
-        const tempPath = filePath + '.tmp.mp4';
-        await normalizeVideo(filePath, tempPath, targetConfig, ffmpegPath, config.bitrate, config.preset);
-        if (fs.existsSync(tempPath)) {
-          fs.unlinkSync(filePath);
-          fs.renameSync(tempPath, filePath);
-          console.log(`Successfully normalized "${file}"`);
-        }
-      }
-      updatedPlaylist.push(file);
-    } catch (err: any) {
-      console.error(`Removing invalid/corrupt video "${file}" from playlist:`, err.message);
-      if (fs.existsSync(filePath)) {
-        try { fs.unlinkSync(filePath); } catch { }
-      }
-    }
-  }
-
-  if (updatedPlaylist.length !== config.playlist.length) {
-    config.playlist = updatedPlaylist;
-    writeConfig(config);
-  }
 
   // 🚀 FIX: Convert to absolute structural paths so Linux FFmpeg won't disconnect silently
   const playlistFilePath = path.join(process.cwd(), 'temp_playlist.txt');
@@ -270,7 +221,7 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     '-ac', targetConfig.channels.toString(),
     '-af', 'aresample=async=1',
     '-max_muxing_queue_size', '1024',
-    '-flvflags no_duration_filesize',
+    '-flvflags', 'no_duration_filesize',
     '-f', 'flv',
     streamUrl
   ];
