@@ -203,6 +203,10 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     streamUrl = `rtmps://iad05.contribute.live-video.net/app/${streamUrl}`;
   }
 
+  const bitrateVal = config.bitrate ? `${config.bitrate}k` : '2500k';
+  const bufsizeVal = config.bitrate ? `${config.bitrate * 2}k` : '5000k';
+  const presetVal = config.preset || 'ultrafast';
+
   // Spawn real static ffmpeg process with global loops enabled
   const args = [
     '-err_detect', 'ignore_err',
@@ -214,7 +218,15 @@ export async function startBroadcastHelper(streamKey: string, config: any) {
     '-i', playlistFilePath,
     '-map', '0:v',
     '-map', '0:a?',
-    '-c:v', 'copy',
+    '-c:v', 'libx264',
+    '-preset', presetVal,
+    '-tune', 'zerolatency',
+    '-threads', '2',
+    '-b:v', bitrateVal,
+    '-maxrate', bitrateVal,
+    '-bufsize', bufsizeVal,
+    '-pix_fmt', 'yuv420p',
+    '-g', '60',
     '-c:a', 'aac',
     '-b:a', '128k',
     '-ar', targetConfig.sampleRate.toString(),
